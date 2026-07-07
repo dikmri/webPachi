@@ -11,8 +11,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "types": ["bun-types"]
+    "noEmit": true
   },
   "include": ["src", "scripts"]
 }

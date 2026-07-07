@@ -116,3 +116,422 @@ html, body {
   font-family: Consolas, monospace;
   color: #9fd49f;
 }
+
+/* ============================================================
+   ここから エージェントC 追記分
+   データカウンター(呼び出しランプ)・スランプグラフ・台枠(上皿/ハンドル)の装飾
+   ============================================================ */
+
+/* ---------------- データカウンター(呼び出しランプ) ---------------- */
+
+.dc-case {
+  width: 100%;
+  height: 100%;
+  background: #050505;
+  border: 2px solid #333;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 10px rgba(0, 0, 0, 0.85),
+    0 0 6px rgba(0, 150, 255, 0.35);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.dc-accent {
+  flex: 0 0 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    #ff004c,
+    #ff9900,
+    #ffee00,
+    #22ff55,
+    #00c8ff,
+    #6a5cff,
+    #ff00c8
+  );
+}
+
+.dc-toggle-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  background: #1c1c1c;
+  color: #ffd479;
+  border: 1px solid #665;
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.dc-toggle-btn:hover { background: #2a2a2a; }
+.dc-toggle-btn:active { transform: translateY(1px); }
+
+.dc-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.dc-page {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dc-page.dc-page-active { display: flex; }
+
+.dc-digits {
+  flex: 0 0 56px;
+  display: flex;
+  gap: 4px;
+}
+
+.dc-digit-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0a;
+  border: 1px solid #222;
+  border-radius: 4px;
+  padding: 2px 0;
+}
+
+.dc-digit-label {
+  font-size: 8px;
+  color: #8a8a8a;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.dc-digit-value {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 1px;
+}
+
+.dc-color-red { color: #ff3030; text-shadow: 0 0 6px rgba(255, 48, 48, 0.7); }
+.dc-color-orange { color: #ffa030; text-shadow: 0 0 6px rgba(255, 160, 48, 0.7); }
+.dc-color-green { color: #30ff60; text-shadow: 0 0 6px rgba(48, 255, 96, 0.7); }
+.dc-color-white { color: #eaf6ff; text-shadow: 0 0 6px rgba(188, 223, 255, 0.6); }
+
+.dc-history-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid #222;
+  padding-top: 4px;
+}
+
+.dc-history-list {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.dc-history-chip {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid currentColor;
+}
+
+.dc-history-kakuhen { color: #ff4d4d; background: rgba(255, 60, 60, 0.12); }
+.dc-history-normal { color: #4da6ff; background: rgba(60, 140, 255, 0.12); }
+.dc-history-empty { font-size: 11px; color: #555; padding-left: 4px; }
+
+/* 大当たり中: データカウンター枠が派手に点滅 */
+.dc-case.dc-jackpot-blink { animation: dcJackpotBlink 0.5s linear infinite; }
+
+@keyframes dcJackpotBlink {
+  0% {
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.85), 0 0 14px 3px #ff3030;
+    border-color: #ff3030;
+  }
+  50% {
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.85), 0 0 14px 3px #3080ff;
+    border-color: #3080ff;
+  }
+  100% {
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.85), 0 0 14px 3px #ff3030;
+    border-color: #ff3030;
+  }
+}
+
+/* ---------------- スランプグラフ ---------------- */
+
+.slump-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.slump-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 4px;
+}
+
+.slump-value {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  font-size: 14px;
+  text-shadow: 0 0 6px currentColor;
+}
+
+/* ---------------- 台枠(上皿) ---------------- */
+
+#tray {
+  display: flex;
+  align-items: center;
+}
+
+.tray-dish {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  color: #2a1e05;
+  background: linear-gradient(160deg, #fff3c4, #d4a017 42%, #7a5b0a 100%);
+  border: 3px solid #4a3608;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 2px 6px rgba(255, 255, 255, 0.55),
+    inset 0 -6px 10px rgba(0, 0, 0, 0.35),
+    0 3px 6px rgba(0, 0, 0, 0.5);
+}
+
+.tray-plate {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffe9a8;
+  background: #111;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #665;
+  white-space: nowrap;
+  box-shadow: inset 0 0 4px #000;
+}
+
+.tray-readouts {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tray-digit-block,
+.tray-yen-block {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.tray-digit-block {
+  background: #0a0a0a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.tray-digit-label {
+  font-size: 9px;
+  color: #aaa;
+}
+
+.tray-digit-value {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.tray-color-amber { color: #ffbb33; text-shadow: 0 0 6px rgba(255, 187, 51, 0.7); }
+
+.tray-yen-value {
+  font-family: Consolas, "Courier New", monospace;
+  font-weight: 700;
+  font-size: 14px;
+  color: #221a06;
+  background: #fff8dd;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #a67c2e;
+}
+
+.tray-lend-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, #ff6b6b, #c62828);
+  color: #fff;
+  border: 1px solid #7a1010;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.tray-lend-btn:hover { filter: brightness(1.1); }
+.tray-lend-btn:active { transform: translateY(1px); }
+
+/* ---------------- ハンドル(発射レバー) ---------------- */
+
+#handle-area {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.handle-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+}
+
+.handle-dial {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #5a5a5a, #101010 72%);
+  box-shadow:
+    inset 0 0 10px #000,
+    0 2px 6px rgba(0, 0, 0, 0.6);
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+}
+
+.handle-dial:active { cursor: grabbing; }
+.handle-dial:focus-visible {
+  box-shadow:
+    inset 0 0 10px #000,
+    0 0 0 3px rgba(255, 212, 121, 0.7);
+}
+
+.handle-meter {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: conic-gradient(#ffd479 calc(var(--power, 0) * 360deg), #2a2a2a 0deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  pointer-events: none;
+}
+
+.handle-knob {
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #d8b968, #7a5b1e 60%, #3a2c10 100%);
+  box-shadow:
+    inset 0 0 6px rgba(0, 0, 0, 0.6),
+    0 1px 3px rgba(0, 0, 0, 0.5);
+  transform: rotate(135deg);
+}
+
+.handle-notch {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 4px;
+  height: 14px;
+  margin-left: -2px;
+  background: #fff2c6;
+  border-radius: 2px;
+  box-shadow: 0 0 4px rgba(255, 242, 198, 0.7);
+}
+
+.handle-stop-btn {
+  background: linear-gradient(180deg, #5a1c1c, #2a0a0a);
+  color: #ffb0b0;
+  border: 1px solid #883030;
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.handle-stop-btn:hover { filter: brightness(1.15); }
+.handle-stop-btn:active { transform: translateY(1px); }
+
+/* ---------------- 台枠本体(#machine)装飾 ---------------- */
+
+#machine.machine-framed {
+  border: 6px solid transparent;
+  border-image: linear-gradient(160deg, #fff3c4, #d4a017 42%, #7a5b0a 100%) 1;
+  border-radius: 10px;
+  background: #10131c;
+  box-shadow:
+    0 0 20px rgba(212, 160, 23, 0.35),
+    inset 0 0 12px rgba(0, 0, 0, 0.6);
+  padding: 4px;
+}
+
+.side-lamp {
+  position: absolute;
+  top: 34px;
+  bottom: 8px;
+  width: 8px;
+  border-radius: 5px;
+  background: repeating-linear-gradient(180deg, #6a5320 0 10px, #221a0a 10px 20px);
+  box-shadow: inset 0 0 4px #000;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.side-lamp-left { left: 2px; }
+.side-lamp-right { right: 2px; }
+
+/* 大当たり中: main が #machine に付与する .jackpot-active でサイドランプが虹色高速点滅 */
+#machine.jackpot-active {
+  box-shadow:
+    0 0 30px 6px rgba(255, 80, 80, 0.55),
+    inset 0 0 12px rgba(0, 0, 0, 0.6);
+}
+
+#machine.jackpot-active .side-lamp {
+  animation: sideLampRainbow 0.6s linear infinite;
+}
+
+@keyframes sideLampRainbow {
+  0% { background-color: #ff004c; box-shadow: 0 0 10px 2px #ff004c; }
+  16% { background-color: #ff9900; box-shadow: 0 0 10px 2px #ff9900; }
+  33% { background-color: #ffee00; box-shadow: 0 0 10px 2px #ffee00; }
+  50% { background-color: #22ff55; box-shadow: 0 0 10px 2px #22ff55; }
+  66% { background-color: #00c8ff; box-shadow: 0 0 10px 2px #00c8ff; }
+  83% { background-color: #6a5cff; box-shadow: 0 0 10px 2px #6a5cff; }
+  100% { background-color: #ff004c; box-shadow: 0 0 10px 2px #ff004c; }
+}
