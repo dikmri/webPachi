@@ -32,11 +32,26 @@ html, body {
   height: 150px;
 }
 
-#machine {
+/* 台全体を必ず画面内に収めるための可視領域。中の#machineがはみ出す場合は
+   main.ts が transform: scale() で縮小する(overflow:hiddenでクリップ) */
+#machine-viewport {
   grid-column: 1 / 2;
   grid-row: 2;
+  align-self: stretch; /* #hallのalign-items:startを上書きし行の高さいっぱいまで伸ばす */
+  width: 480px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+#machine {
   position: relative;
   width: 480px;
+  flex: 0 0 auto;
+  transform-origin: top center;
 }
 
 #machine-top {

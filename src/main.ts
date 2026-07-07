@@ -24,6 +24,7 @@ const dataCounterEl = document.getElementById("data-counter")!;
 const trayEl = document.getElementById("tray")!;
 const handleEl = document.getElementById("handle-area")!;
 const machineEl = document.getElementById("machine")!;
+const machineViewportEl = document.getElementById("machine-viewport")!;
 const logViewEl = document.getElementById("log-view")!;
 const logDlBtn = document.getElementById("log-dl") as HTMLButtonElement;
 const muteBtn = document.getElementById("mute-btn") as HTMLButtonElement;
@@ -43,6 +44,27 @@ const audio = new SoundEngine();
 reels.mount(lcdEl, holdEl);
 dataCounter.mount(dataCounterEl);
 frame.mount(trayEl, handleEl);
+
+// ---------------- 台全体を画面内に収める ----------------
+// #machine の実サイズ(液晶・上皿・ハンドルを含めた本来の高さ)がビューポートより
+// 大きい場合、はみ出してハンドルなどが見えなくなることがあるため、
+// transform: scale() で全体を縮小してビューポート内に収める。
+// (offsetWidth/offsetHeightはtransformの影響を受けないため、常に「本来のサイズ」を測れる)
+
+function fitMachineToViewport(): void {
+  const naturalW = machineEl.offsetWidth;
+  const naturalH = machineEl.offsetHeight;
+  if (naturalW === 0 || naturalH === 0) return;
+  const availW = machineViewportEl.clientWidth;
+  const availH = machineViewportEl.clientHeight;
+  const scale = Math.min(1, availW / naturalW, availH / naturalH);
+  machineEl.style.transform = `scale(${scale})`;
+}
+
+window.addEventListener("resize", fitMachineToViewport);
+fitMachineToViewport();
+// フォント読み込み等でレイアウトが確定した直後にもう一度合わせる
+requestAnimationFrame(fitMachineToViewport);
 
 // ---------------- プレイヤー状態・統計(main が唯一の所有者) ----------------
 

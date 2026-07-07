@@ -12,20 +12,23 @@
         <!-- データカウンター(ホールの呼び出しランプ) : ui/dataCounter.ts が中身を構築 -->
         <div id="data-counter"></div>
 
-        <!-- パチンコ台本体 -->
-        <div id="machine">
-          <div id="machine-top"><span id="machine-name">P ドリームオーシャン 99ver.</span></div>
-          <div id="board-wrap">
-            <canvas id="board-canvas" width="480" height="660"></canvas>
-            <!-- 液晶(図柄) : game/reels.ts が中身を構築 -->
-            <div id="lcd"></div>
-            <!-- 保留表示 : game/reels.ts が中身を構築 -->
-            <div id="hold"></div>
+        <!-- パチンコ台本体: #machine-viewport が可視領域、#machine を main.ts が
+             縮小scaleして必ず画面内に収める(台全体が常に見えるようにするため) -->
+        <div id="machine-viewport">
+          <div id="machine">
+            <div id="machine-top"><span id="machine-name">P ドリームオーシャン 99ver.</span></div>
+            <div id="board-wrap">
+              <canvas id="board-canvas" width="480" height="660"></canvas>
+              <!-- 液晶(図柄) : game/reels.ts が中身を構築 -->
+              <div id="lcd"></div>
+              <!-- 保留表示 : game/reels.ts が中身を構築 -->
+              <div id="hold"></div>
+            </div>
+            <!-- 上皿・貸玉・持ち玉 : ui/frame.ts が中身を構築 -->
+            <div id="tray"></div>
+            <!-- ハンドル : ui/frame.ts が中身を構築 -->
+            <div id="handle-area"></div>
           </div>
-          <!-- 上皿・貸玉・持ち玉 : ui/frame.ts が中身を構築 -->
-          <div id="tray"></div>
-          <!-- ハンドル : ui/frame.ts が中身を構築 -->
-          <div id="handle-area"></div>
         </div>
 
         <!-- デバッグ/動作確認ログパネル -->

@@ -241,22 +241,24 @@ export const WINDMILL_SPIN_SPEED = 1.6;
 
 // ---------------- 天釘 ----------------
 
+/** 天釘(レール解放点の少し下、盤面最上部で玉を左右に振り分ける最初の関門) */
 export const TENKUGI: NailDef[] = [
-  { x: 228, y: 108 },
-  { x: 252, y: 108 },
+  { x: 216, y: 110 },
+  { x: 240, y: 106 },
+  { x: 264, y: 110 },
 ];
 
 // ---------------- ヘソ周り(命釘・道釘・ジャンプ釘) ----------------
 
 /** ヘソ(スタートチャッカー) */
-export const HESO = { x: 240, y: 558, halfWidth: 13 };
+export const HESO = { x: 240, y: 558, halfWidth: 11 };
 
 /**
  * 命釘(ヘソの真上で入賞率を支配する最重要の2本)。
  * gap は中心間隔。値を狭めるほどヘソに入りにくくなる(=回転率が落ちる)。
  * ここを scripts/simulate.ts の結果を見ながら調整する。
  */
-export const INNAIL_GAP = 64;
+export const INNAIL_GAP = 70;
 export const INNAIL_Y = 540;
 export const INNAILS: NailDef[] = [
   { x: HESO.x - INNAIL_GAP / 2, y: INNAIL_Y },
@@ -271,22 +273,25 @@ export const INNAILS: NailDef[] = [
  */
 export const ROAD_NAIL_X_START = 40;
 export const ROAD_NAIL_X_END = 224;
-export const ROAD_NAIL_COUNT = 16;
-export const ROAD_NAIL_GAP_INDEX = 7; // このインデックスの釘を間引く(こぼし)
+export const ROAD_NAIL_COUNT = 14;
+export const ROAD_NAIL_GAP_INDEX = 6; // このインデックスの釘を間引く(こぼし)
 export const ROAD_NAIL_Y_START = 546;
 export const ROAD_NAIL_Y_END = 566;
 
-export const ROAD_NAILS: NailDef[] = (() => {
+/** 道釘列を1本生成する汎用ビルダー(左右で始点・終点だけを反転して共用する) */
+function buildRoadNails(xStart: number, xEnd: number): NailDef[] {
   const nails: NailDef[] = [];
   for (let i = 0; i < ROAD_NAIL_COUNT; i++) {
     if (i === ROAD_NAIL_GAP_INDEX) continue; // こぼしの切れ目
     const t = i / (ROAD_NAIL_COUNT - 1);
-    const x = ROAD_NAIL_X_START + (ROAD_NAIL_X_END - ROAD_NAIL_X_START) * t;
+    const x = xStart + (xEnd - xStart) * t;
     const y = ROAD_NAIL_Y_START + (ROAD_NAIL_Y_END - ROAD_NAIL_Y_START) * t;
     nails.push({ x, y });
   }
   return nails;
-})();
+}
+
+export const ROAD_NAILS: NailDef[] = buildRoadNails(ROAD_NAIL_X_START, ROAD_NAIL_X_END);
 
 /** ジャンプ釘: 道釘列の終端で玉を跳ねさせ、命釘の間へ送り込む */
 export const JUMP_NAIL: NailDef = { x: 220, y: 542 };
@@ -297,20 +302,10 @@ export const JUMP_NAIL: NailDef = { x: 220, y: 542 };
  * 右側に落ちた玉にもヘソへ戻る経路を用意しないと、片側の経路だけでは
  * 回転率が低くなりすぎる。命釘の間(HESO.x 中央)へ向けて左と対称に送り込む。
  */
-export const ROAD_NAIL_X_START_R = HESO.x * 2 - ROAD_NAIL_X_START; // 422
-export const ROAD_NAIL_X_END_R = HESO.x * 2 - ROAD_NAIL_X_END; // 272
+export const ROAD_NAIL_X_START_R = HESO.x * 2 - ROAD_NAIL_X_START; // 440
+export const ROAD_NAIL_X_END_R = HESO.x * 2 - ROAD_NAIL_X_END; // 256
 
-export const ROAD_NAILS_RIGHT: NailDef[] = (() => {
-  const nails: NailDef[] = [];
-  for (let i = 0; i < ROAD_NAIL_COUNT; i++) {
-    if (i === ROAD_NAIL_GAP_INDEX) continue; // こぼしの切れ目(左と対称)
-    const t = i / (ROAD_NAIL_COUNT - 1);
-    const x = ROAD_NAIL_X_START_R + (ROAD_NAIL_X_END_R - ROAD_NAIL_X_START_R) * t;
-    const y = ROAD_NAIL_Y_START + (ROAD_NAIL_Y_END - ROAD_NAIL_Y_START) * t;
-    nails.push({ x, y });
-  }
-  return nails;
-})();
+export const ROAD_NAILS_RIGHT: NailDef[] = buildRoadNails(ROAD_NAIL_X_START_R, ROAD_NAIL_X_END_R);
 
 /** ジャンプ釘(右側、左と対称) */
 export const JUMP_NAIL_RIGHT: NailDef = { x: HESO.x * 2 - JUMP_NAIL.x, y: JUMP_NAIL.y };
@@ -341,76 +336,183 @@ export const POCKET_HALF_WIDTH = 6;
  */
 export const OUT_ZONE = { x: 245, y: 650, halfWidth: 205 };
 
-// ---------------- 寄り釘・バラ釘(左右打ち分け領域の散らし釘) ----------------
+// ---------------- 縁釘(外周に沿った釘列) ----------------
 
 /**
- * 左右の打ち分け領域に配置する散らし釘。中央液晶(CENTER_BOX)・風車・道釘列・
- * 命釘と重ならないように手作業でチューニングした座標(実機の釘図を参考にした
- * オリジナル配置)。玉の落下経路にランダム性を持たせ、回転率を安定させる。
+ * 折れ線 path に沿って弧長 spacing 間隔で点をサンプリングし、その位置から
+ * 法線方向に inset だけ内側(center 側)へオフセットした釘座標列を返す。
+ * 実機の「外側の誘導レールのすぐ内側に一列に並ぶ縁釘」を機械的に生成する
+ * ための汎用ヘルパー(railPointAt と同じ弧長パラメトリック補間を使う)。
  */
-export const SCATTER_NAILS: NailDef[] = [
-  // --- 左側上段(天釘の下、液晶左肩) ---
-  { x: 168, y: 138 },
-  { x: 150, y: 168 },
-  { x: 190, y: 158 },
-  // --- 右側上段(液晶右肩) ---
-  { x: 312, y: 138 },
-  { x: 330, y: 168 },
-  { x: 290, y: 158 },
-  // --- 左側中段(風車の上下) ---
-  { x: 76, y: 200 },
-  { x: 108, y: 230 },
-  { x: 66, y: 254 },
-  { x: 96, y: 330 },
-  { x: 70, y: 350 },
-  { x: 128, y: 356 },
-  // --- 右側中段(風車の上下、左右対称気味に) ---
-  { x: 404, y: 200 },
-  { x: 372, y: 230 },
-  { x: 414, y: 254 },
-  { x: 384, y: 330 },
-  { x: 410, y: 350 },
-  { x: 352, y: 356 },
-  // --- 左側下段(道釘列の上、ヘソへ寄せる) ---
-  { x: 62, y: 400 },
-  { x: 100, y: 410 },
-  { x: 140, y: 420 },
-  { x: 76, y: 460 },
-  { x: 118, y: 470 },
-  { x: 160, y: 480 },
-  { x: 96, y: 510 },
-  // --- 右側下段(強めのハンドルで来た玉を中央へ寄せる) ---
-  { x: 398, y: 410 },
-  { x: 358, y: 420 },
-  { x: 318, y: 430 },
-  { x: 404, y: 470 },
-  { x: 362, y: 480 },
-  { x: 320, y: 500 },
+function edgeNailsAlong(path: Vec2[], spacing: number, inset: number, center: Vec2): NailDef[] {
+  const cum = cumulativeLength(path);
+  const total = cum[cum.length - 1];
+  const nails: NailDef[] = [];
+  for (let d = spacing / 2; d < total; d += spacing) {
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < d) i++;
+    const d0 = cum[i - 1];
+    const d1 = cum[i];
+    const segLen = d1 - d0 || 1;
+    const t = (d - d0) / segLen;
+    const p0 = path[i - 1];
+    const p1 = path[i];
+    const px = p0.x + (p1.x - p0.x) * t;
+    const py = p0.y + (p1.y - p0.y) * t;
+    let tx = p1.x - p0.x;
+    let ty = p1.y - p0.y;
+    const tl = Math.hypot(tx, ty) || 1;
+    tx /= tl;
+    ty /= tl;
+    // 接線を90度回転させた法線候補から、中心へ向かう向き(内側)を選ぶ
+    let nx = -ty;
+    let ny = tx;
+    const toCenterX = center.x - px;
+    const toCenterY = center.y - py;
+    if (nx * toCenterX + ny * toCenterY < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    nails.push({ x: px + nx * inset, y: py + ny * inset });
+  }
+  return nails;
+}
+
+/** 縁釘の間隔(弧長)・外壁からの内側オフセット */
+const EDGE_NAIL_SPACING = 26;
+const EDGE_NAIL_INSET = 15;
+
+/**
+ * 上部円弧のうち「発射レールの内壁」に相当する区間(左合流点→解放点)。
+ * ここは解放点より手前なのでレール内壁自体は物理ボディを持たないが、
+ * 解放点から先の開放された盤面と滑らかに繋がる縁釘の基準線として使う。
+ */
+const TOP_ARC_CENTERLINE = sampleArc(ARC_CENTER.x, ARC_CENTER.y, ARC_R, ARC_LEFT_DEG, ARC_RELEASE_DEG, RAIL_SEGMENTS);
+const TOP_ARC_INNER = offsetPolyline(TOP_ARC_CENTERLINE, RAIL_WIDTH / 2, ARC_CENTER, false);
+
+/**
+ * 外周に沿った縁釘列(上部円弧の左肩〜解放点〜右肩〜右辺を下って最下部近くまで)。
+ * 実機の「外側の誘導レールのすぐ内側に上から左右両サイドまでずっと並ぶ釘列」
+ * を再現し、盤面外周がスカスカに見える問題を解消する。強めのハンドルで
+ * 右壁沿いを転がる「右打ちルート」の土台にもなる。
+ */
+const EDGE_NAILS_RAW: NailDef[] = [
+  ...edgeNailsAlong(TOP_ARC_INNER, EDGE_NAIL_SPACING, EDGE_NAIL_INSET, ARC_CENTER),
+  ...edgeNailsAlong(FIELD_RIGHT_WALL, EDGE_NAIL_SPACING, EDGE_NAIL_INSET, ARC_CENTER),
+];
+
+// ---------------- 上部〜中段の密な釘field(千鳥格子) ----------------
+
+/**
+ * 天井付近から風車周りにかけての密な釘field。実機らしい「均等な間隔で
+ * 規則正しく並ぶが、経路によって微妙に振り分けが変わる」千鳥格子
+ * (スタッガード配置)を機械的に生成する。中央液晶(CENTER_BOX)と風車の
+ * 可動域は避ける。
+ */
+function buildStaggeredField(): NailDef[] {
+  const rowSpacingY = 24;
+  const colSpacingX = 26;
+  const yStart = 122;
+  const yEnd = 334;
+  const xStart = 44;
+  const xEnd = 422;
+  const boxMargin = 16;
+  const windmillClearance = 32;
+
+  const nails: NailDef[] = [];
+  let row = 0;
+  for (let y = yStart; y <= yEnd; y += rowSpacingY, row++) {
+    const offset = row % 2 === 0 ? 0 : colSpacingX / 2;
+    for (let x = xStart + offset; x <= xEnd; x += colSpacingX) {
+      const insideBox =
+        x > CENTER_BOX.x0 - boxMargin && x < CENTER_BOX.x1 + boxMargin && y > CENTER_BOX.y0 - boxMargin && y < CENTER_BOX.y1 + boxMargin;
+      if (insideBox) continue;
+      const nearWindmill = WINDMILLS.some((w) => Math.hypot(x - w.x, y - w.y) < windmillClearance);
+      if (nearWindmill) continue;
+      nails.push({ x, y });
+    }
+  }
+  return nails;
+}
+
+const STAGGERED_FIELD_RAW: NailDef[] = buildStaggeredField();
+
+// ---------------- 袖釘(センター役物まわりの「ハの字」漏斗) ----------------
+
+/**
+ * センター役物(液晶枠)の左下・右下のすぐ外側に置く「袖釘」。
+ * 液晶の角に沿って落ちてきた玉を、ハの字(上ほど役物に近く、下へ行くほど
+ * 外側へ開く)に受け止めて自然に下段の寄せ釘・道釘へ引き継がせる。
+ */
+export const SODE_NAILS: NailDef[] = [
+  { x: 116, y: 336 },
+  { x: 104, y: 358 },
+  { x: 96, y: 382 },
+  { x: 364, y: 336 },
+  { x: 376, y: 358 },
+  { x: 384, y: 382 },
 ];
 
 /**
- * センター役物(液晶枠)の左右下角のすぐ下に置く「寄せ釘」。
- * 液晶の上や横を転がってきた玉をヘソの通り道(中央付近)へ寄せるための
- * ガイド役。これが無いと液晶の左右どちらに落ちるかで経路が大きく偏り、
- * ヘソ到達率が安定しなかった。
+ * 袖釘を抜けた玉を命釘・道釘・ヘソへ収束させる下段の寄せ釘。
+ * 左右対称に、下へ行くほど中央(ヘソ)側へ寄っていく「漏斗」を形成する。
  */
-export const CORNER_GUIDE_NAILS: NailDef[] = [
-  { x: 138, y: 336 },
-  { x: 118, y: 356 },
-  { x: 342, y: 336 },
-  { x: 362, y: 356 },
+export const CONVERGE_NAILS: NailDef[] = [
+  { x: 74, y: 408 },
+  { x: 112, y: 416 },
+  { x: 150, y: 428 },
+  { x: 62, y: 452 },
+  { x: 100, y: 464 },
+  { x: 140, y: 476 },
+  { x: 86, y: 500 },
+  { x: 122, y: 510 },
+  { x: 406, y: 408 },
+  { x: 368, y: 416 },
+  { x: 330, y: 428 },
+  { x: 418, y: 452 },
+  { x: 380, y: 464 },
+  { x: 340, y: 476 },
+  { x: 394, y: 500 },
+  { x: 358, y: 510 },
 ];
 
-/** 物理ボディを作る釘の全リスト(天釘+命釘+道釘(左右)+ジャンプ釘(左右)+寄せ釘+散らし釘) */
-export const ALL_NAILS: NailDef[] = [
-  ...TENKUGI,
+/**
+ * 命釘・道釘・ジャンプ釘・袖釘・寄せ釘は入賞率チューニング上の意味を持つ
+ * 「機能釘」として扱い、座標を厳密に管理する。縁釘・千鳥格子はこれらに
+ * 近すぎる場合(見た目上の重なり・玉が挟まる隙間になる)は間引く。
+ */
+const FUNCTIONAL_NAILS: NailDef[] = [
   ...INNAILS,
+  ...SODE_NAILS,
+  ...CONVERGE_NAILS,
   ...ROAD_NAILS,
-  JUMP_NAIL,
-  ...CORNER_GUIDE_NAILS,
   ...ROAD_NAILS_RIGHT,
+  JUMP_NAIL,
   JUMP_NAIL_RIGHT,
-  ...SCATTER_NAILS,
+];
+/** 機能釘とこれ未満の距離になる縁釘/千鳥格子釘は間引く(px) */
+const NAIL_MIN_CLEARANCE = 11;
+
+function farEnoughFromFunctional(n: NailDef): boolean {
+  return FUNCTIONAL_NAILS.every((o) => Math.hypot(n.x - o.x, n.y - o.y) >= NAIL_MIN_CLEARANCE);
+}
+
+/** 縁釘(機能釘と近すぎるものを間引いた最終版) */
+export const EDGE_NAILS: NailDef[] = EDGE_NAILS_RAW.filter(farEnoughFromFunctional);
+/** 千鳥格子の密な釘field(機能釘と近すぎるものを間引いた最終版) */
+export const STAGGERED_FIELD: NailDef[] = STAGGERED_FIELD_RAW.filter(farEnoughFromFunctional);
+
+/**
+ * 物理ボディを作る釘の全リスト。
+ * 縁釘(外周)+千鳥格子(上部〜中段の密な釘field)+天釘+命釘+袖釘+寄せ釘+
+ * 道釘(左右)+ジャンプ釘(左右)。合計本数は概ね130〜150本程度になる
+ * (実機の「密な釘盤」らしさを狙いつつ、シミュレーション負荷とのバランスも考慮)。
+ */
+export const ALL_NAILS: NailDef[] = [
+  ...EDGE_NAILS,
+  ...STAGGERED_FIELD,
+  ...TENKUGI,
+  ...FUNCTIONAL_NAILS,
 ];
 
 // 型チェック用: BOARD_W/BOARD_H を使っていることを明示(範囲外に出ていないかの目安)
@@ -423,10 +525,33 @@ export const BOARD_BOUNDS = { w: BOARD_W, h: BOARD_H };
 
 /** 盤面上に存在できる玉の上限。超えたら最も古い玉から消す */
 const MAX_BALLS = 60;
-/** 物理更新の固定ステップ幅(1000/120秒 ≒ 8.33ms) */
-const STEP_MS = 1000 / 120;
-/** update() 1回あたりに進める最大ステップ数(タブ非アクティブ復帰時などの暴走防止) */
-const MAX_STEPS_PER_UPDATE = 24;
+/**
+ * 物理更新の固定ステップ幅。
+ * 貫通(tunneling)対策その1: 従来 1000/120(≒8.33ms)だったが、レール解放直後の
+ * 玉は最大 3000px/s 近くに達し、8.33ms では 1 ステップで約25px移動してしまう
+ * (釘の当たり判定幅は BALL_RADIUS+NAIL_RADIUS=7.5px しかない)。ステップを
+ * 1000/240(≒4.17ms)まで細分化し、通常の matter-js 離散衝突自体の精度を上げる。
+ * ただしこれだけでは根本解決にならないため、下の CCD スイープ(玉と釘専用の
+ * 連続衝突判定)を主対策として併用する(STEP_MS を細かくするのはあくまで
+ * 壁・センター役物・風車など CCD 対象外のボディとの衝突精度を底上げする保険)。
+ */
+const STEP_MS = 1000 / 240;
+/**
+ * update() 1回あたりに進める最大ステップ数(タブ非アクティブ復帰時などの暴走防止)。
+ * STEP_MS を 1000/120→1000/240 に半分にした分、同じ実時間(≒200ms)をカバーする
+ * ために 24→48 へ倍増させる。ここを比例して増やさないと、タブ復帰などで dt が
+ * 大きくなった際に「見かけ上のスローモーション」が発生してしまう。
+ */
+const MAX_STEPS_PER_UPDATE = 48;
+/**
+ * 玉の最大速度(px/秒)によるクランプ。貫通対策その2: CCDスイープが主対策だが、
+ * 万一の異常な跳ね返り(衝突が重なって速度が増幅されるバグ等)による暴走を
+ * 抑える保険として、理論上の最大発射速度(LAUNCH_SPEED_MAX×最大jitter≒3042px/s)
+ * より十分大きい値でクランプする。強めのハンドルの正規の挙動は妨げない。
+ */
+const MAX_BALL_SPEED = 3400;
+/** 釘の反発係数。createWorld の釘ボディ生成と CCD スイープでの反射計算で共有する */
+const NAIL_RESTITUTION = 0.42;
 
 /**
  * 発射初速の下限・上限(実際の px/秒)。power(0..1) に対して
@@ -480,6 +605,12 @@ interface BallTrack {
   stillMs: number;
   /** レール走行中はここに状態が入り、通常物理へ移行すると null になる */
   rail: RailRideState | null;
+  /**
+   * このステップの Matter.Engine.update() 直前の位置。CCDスイープ(貫通対策その4)で
+   * 「前の位置→今の位置」を線分とみなして釘との交差を調べるために使う。
+   * レール走行中(rail!=null)の玉は対象外なので null にする。
+   */
+  sweepPrev: Vec2 | null;
 }
 
 /** レンダラーに渡すための、玉・風車などの現在スナップショット */
@@ -500,7 +631,12 @@ export function createWorld(): {
   world: Matter.World;
   windmills: WindmillState[];
 } {
-  const engine = Matter.Engine.create();
+  // 貫通対策その3: positionIterations/velocityIterations を既定値(6/4)より
+  // 引き上げ、衝突解決の精度を上げる(重なり解消・速度解決をより正確に行う)。
+  const engine = Matter.Engine.create({
+    positionIterations: 10,
+    velocityIterations: 8,
+  });
   engine.gravity.x = 0;
   engine.gravity.y = 1;
 
@@ -535,12 +671,12 @@ export function createWorld(): {
   const warp = WARP_ENTRANCE;
   bodies.push(sensorRect(warp.x, warp.y, warp.w, warp.h, "warp"));
 
-  // ---- 釘(天釘・命釘・道釘・ジャンプ釘・寄り釘/バラ釘 すべて) ----
+  // ---- 釘(縁釘・千鳥格子・天釘・命釘・道釘・ジャンプ釘・袖釘・寄せ釘 すべて) ----
   for (const n of ALL_NAILS) {
     bodies.push(
       Matter.Bodies.circle(n.x, n.y, n.r ?? NAIL_RADIUS, {
         isStatic: true,
-        restitution: 0.38,
+        restitution: NAIL_RESTITUTION,
         friction: 0.12,
         label: "nail",
       }),
@@ -626,6 +762,124 @@ function buildWallChain(points: Vec2[], thickness: number, restitution: number):
   return segs;
 }
 
+// =============================================================
+// 貫通(tunneling)対策: 玉と釘専用の簡易連続衝突判定(CCD スイープ)
+// =============================================================
+//
+// matter-js は離散(discrete)衝突判定のエンジンで、標準では CCD を行わない。
+// 釘の半径(NAIL_RADIUS)+玉の半径(BALL_RADIUS)=7.5px しかない当たり判定幅に
+// 対し、レール解放直後や自由落下中の玉は 1 ステップで数px〜十数px移動するため、
+// 「ステップ前後どちらの瞬間にも釘に7.5px以内まで近づいていない」まま釘の
+// 内側を通過してしまう(すり抜け)ケースが発生しうる。
+// これを解消するため、各サブステップで Matter.Engine.update() を呼ぶ前後の
+// 玉の座標(prevPos→newPos)を線分とみなし、その近傍にある釘それぞれについて
+// 「線分と釘中心の最短距離」が BALL_RADIUS+nail.r を下回っていないか幾何学的に
+// 厳密にチェックする。下回っていて、かつ線分の両端点がどちらも釘の外側にある
+// (=matter-js 側の離散衝突ではそもそも検出されない)場合のみ、線分上の接触点
+// まで玉を押し戻し、法線方向に速度を反射させる。
+
+/**
+ * 釘を格子状のバケツに登録する簡易空間分割。釘は静的でゲーム中に増減しない
+ * ため、コンストラクタで1回だけ構築して使い回す。玉のスイープ線分の周囲
+ * 一定距離内の釘だけに絞り込むことで、釘数×玉数の総当たりを避ける。
+ */
+class NailGrid {
+  private readonly cells = new Map<string, NailDef[]>();
+
+  constructor(
+    nails: NailDef[],
+    private readonly cellSize: number,
+  ) {
+    for (const n of nails) {
+      const key = this.keyOf(n.x, n.y);
+      let bucket = this.cells.get(key);
+      if (!bucket) {
+        bucket = [];
+        this.cells.set(key, bucket);
+      }
+      bucket.push(n);
+    }
+  }
+
+  private keyOf(x: number, y: number): string {
+    return `${Math.floor(x / this.cellSize)}:${Math.floor(y / this.cellSize)}`;
+  }
+
+  /** 矩形範囲に重なるセルに含まれる釘をまとめて返す(範囲外の釘は含まれない) */
+  queryRect(x0: number, y0: number, x1: number, y1: number): NailDef[] {
+    const cx0 = Math.floor(x0 / this.cellSize);
+    const cx1 = Math.floor(x1 / this.cellSize);
+    const cy0 = Math.floor(y0 / this.cellSize);
+    const cy1 = Math.floor(y1 / this.cellSize);
+    const out: NailDef[] = [];
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const bucket = this.cells.get(`${cx}:${cy}`);
+        if (bucket) out.push(...bucket);
+      }
+    }
+    return out;
+  }
+}
+
+/** スイープ判定で使う空間分割のセルサイズ(px)。釘の平均間隔より大きめに取る */
+const NAIL_GRID_CELL_SIZE = 40;
+/** 玉のスイープ矩形に足す余白(px)。1ステップの最大移動量+釘半径+玉半径に余裕を持たせた値 */
+const NAIL_SWEEP_MARGIN = 30;
+/** 釘専用の空間分割インデックス(ALL_NAILS 確定後に1回だけ構築) */
+const NAIL_GRID = new NailGrid(ALL_NAILS, NAIL_GRID_CELL_SIZE);
+
+interface TunnelHit {
+  /** 線分上の交点パラメータ(0..1)。複数釘がヒットした場合、最小のものを採用する */
+  t: number;
+  point: Vec2;
+  /** 釘中心→接触点方向の単位法線ベクトル */
+  normal: Vec2;
+}
+
+/**
+ * 線分 p0→p1 が、中心 center・半径 r の円に「入る」交点を求める。
+ * 線分の始点・終点がどちらも円の外側にあり、かつ線分が円を横切っている
+ * (=すり抜け候補)場合のみ結果を返す。始点or終点が既に円内にある場合は
+ * 通常の matter-js 離散衝突が処理できる範囲なので対象外として null を返す
+ * (=「両端点は当たり判定の外なのに、その間の軌跡だけが当たり判定を貫通している」
+ * という、まさに tunneling の典型的な幾何条件だけを拾う)。
+ */
+function raySegmentCircleEntry(p0: Vec2, p1: Vec2, center: Vec2, r: number): TunnelHit | null {
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const fx = p0.x - center.x;
+  const fy = p0.y - center.y;
+
+  // 「既に半径内」の判定には微小な許容誤差(RESOLVED_EPS)を持たせる。
+  // matter-js 自身が正常に解決した衝突は、位置補正の結果ちょうど半径ぎりぎり
+  // (浮動小数点誤差で r+0.0001 のようにわずかに外側)に収まることがあり、
+  // 許容誤差なしだと「本当は解決済みなのに未解決」と誤判定してしまうため。
+  const RESOLVED_EPS = 0.5;
+  const startDist = Math.hypot(fx, fy);
+  if (startDist <= r + RESOLVED_EPS) return null;
+  const endDist = Math.hypot(p1.x - center.x, p1.y - center.y);
+  if (endDist <= r + RESOLVED_EPS) return null;
+
+  const a = dx * dx + dy * dy;
+  if (a < 1e-9) return null; // ほぼ移動していない
+
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - r * r;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return null; // 線分は円と交わらない
+
+  const sqrtDisc = Math.sqrt(disc);
+  const t1 = (-b - sqrtDisc) / (2 * a);
+  const t2 = (-b + sqrtDisc) / (2 * a);
+  const t = t1 >= 0 && t1 <= 1 ? t1 : t2 >= 0 && t2 <= 1 ? t2 : null;
+  if (t === null) return null;
+
+  const point: Vec2 = { x: p0.x + dx * t, y: p0.y + dy * t };
+  const normal: Vec2 = { x: (point.x - center.x) / r, y: (point.y - center.y) / r };
+  return { t, point, normal };
+}
+
 /**
  * ヘッドレス物理シミュレーション本体。
  * - 玉の発射・固定タイムステップでの物理更新・衝突判定(センサー入賞)・
@@ -647,6 +901,20 @@ export class PhysicsCore {
   private attackerOpen = false;
   /** スルーゲートの多重カウント防止(玉ID→最終通過時刻) */
   private readonly gateCooldown = new Map<number, number>();
+
+  /** CCDスイープが「すり抜けを検出し補正した」回数(検証用計測) */
+  private tunnelFixed = 0;
+  /**
+   * 補正後もなお当たり判定を素通りしてしまった(=修正漏れ)回数(検証用計測)。
+   * ストレステストで 0(またはほぼ0)に収束することを確認する対象。
+   */
+  private tunnelEscaped = 0;
+  /**
+   * true の間、全釘に対する網羅的な監査(tunnelEscaped の計測)を毎ステップ行う。
+   * 通常プレイ/回転率チューニングでは不要な負荷なのでデフォルト off。
+   * scripts/simulate.ts の貫通ストレステストでのみ有効化する。
+   */
+  private auditTunneling = false;
 
   constructor() {
     const w = createWorld();
@@ -681,6 +949,7 @@ export class PhysicsCore {
       lastPos: { x: ball.position.x, y: ball.position.y },
       stillMs: 0,
       rail: { dist: 0, speed },
+      sweepPrev: null,
     });
 
     this.events.push({ type: "launched" });
@@ -695,8 +964,11 @@ export class PhysicsCore {
     let steps = 0;
     while (this.accumulator >= STEP_MS && steps < MAX_STEPS_PER_UPDATE) {
       this.tickWindmills();
+      this.capturePrePositions(); // CCDスイープ用: Engine.update直前の位置を記録
       Matter.Engine.update(this.engine, STEP_MS);
       this.tickRailBalls(STEP_MS / 1000);
+      this.sweepAndFixTunneling(); // 貫通対策その4: 玉と釘のCCDスイープ
+      this.clampBallSpeeds(); // 貫通対策その2: 異常な速度増幅の保険クランプ
       this.simTimeMs += STEP_MS;
       this.cleanupBalls();
       this.accumulator -= STEP_MS;
@@ -720,6 +992,16 @@ export class PhysicsCore {
 
   ballsInPlay(): number {
     return this.balls.length;
+  }
+
+  /** 貫通(tunneling)ストレステスト用: 網羅監査(tunnelEscaped計測)の有効/無効を切り替える */
+  setTunnelAuditEnabled(enabled: boolean): void {
+    this.auditTunneling = enabled;
+  }
+
+  /** 貫通(tunneling)の検証用計測値を取得する */
+  getTunnelStats(): { fixed: number; escaped: number } {
+    return { fixed: this.tunnelFixed, escaped: this.tunnelEscaped };
   }
 
   get isDenchuOpen(): boolean {
@@ -750,6 +1032,110 @@ export class PhysicsCore {
       Matter.Body.setVelocity(wm.body, { x: 0, y: 0 });
       // setAngularVelocity の引数は 1/60 秒基準のラジアンなので rad/秒 から変換する
       Matter.Body.setAngularVelocity(wm.body, wm.spin / 60);
+    }
+  }
+
+  /**
+   * CCDスイープ用: このステップの Matter.Engine.update() 直前の位置を記録する。
+   * レール走行中(スクリプトで座標を直接動かす)の玉は対象外なので null にし、
+   * レールから通常物理へ移行した直後の1ステップも(移行前はレール制御だった
+   * ため直線移動という前提が成り立たない)自動的にスキップされる。
+   */
+  private capturePrePositions(): void {
+    for (const b of this.balls) {
+      b.sweepPrev = b.rail ? null : { x: b.body.position.x, y: b.body.position.y };
+    }
+  }
+
+  /**
+   * 貫通(tunneling)対策の本体: 玉と釘専用の簡易CCD(連続衝突判定)。
+   * 各玉について、このステップ開始時の位置(sweepPrev)と Matter.Engine.update
+   * 後の位置を結ぶ線分が、近傍の釘の当たり判定円を「両端点は外側なのに
+   * 中間だけ貫通している」形で横切っていないか調べる。該当する場合は
+   * 最初に交差する釘(t が最小)の接触点まで玉を押し戻し、法線方向に
+   * 反発係数を考慮して速度を反射させる。
+   *
+   * 加えて、auditTunneling が有効な場合のみ、空間分割を介さず ALL_NAILS
+   * 全体に対して「補正後もなお貫通が残っていないか」を監査する
+   * (検証用。ストレステストで tunnelEscaped が 0 に収束することを確認する)。
+   */
+  private sweepAndFixTunneling(): void {
+    for (const b of this.balls) {
+      const prev = b.sweepPrev;
+      b.sweepPrev = null;
+      if (!prev || b.rail) continue;
+
+      const cur = { x: b.body.position.x, y: b.body.position.y };
+      const candidates = NAIL_GRID.queryRect(
+        Math.min(prev.x, cur.x) - NAIL_SWEEP_MARGIN,
+        Math.min(prev.y, cur.y) - NAIL_SWEEP_MARGIN,
+        Math.max(prev.x, cur.x) + NAIL_SWEEP_MARGIN,
+        Math.max(prev.y, cur.y) + NAIL_SWEEP_MARGIN,
+      );
+
+      let fixedNail: NailDef | null = null;
+      if (candidates.length > 0) {
+        let bestHit: TunnelHit | null = null;
+        let bestNail: NailDef | null = null;
+        for (const nail of candidates) {
+          const r = BALL_RADIUS + (nail.r ?? NAIL_RADIUS);
+          const hit = raySegmentCircleEntry(prev, cur, nail, r);
+          if (hit && (!bestHit || hit.t < bestHit.t)) {
+            bestHit = hit;
+            bestNail = nail;
+          }
+        }
+        if (bestHit && bestNail) {
+          this.tunnelFixed++;
+          const r = BALL_RADIUS + (bestNail.r ?? NAIL_RADIUS);
+          const pushed = {
+            x: bestHit.point.x + bestHit.normal.x * (r + 0.05),
+            y: bestHit.point.y + bestHit.normal.y * (r + 0.05),
+          };
+          Matter.Body.setPosition(b.body, pushed);
+          const v = b.body.velocity;
+          const vDotN = v.x * bestHit.normal.x + v.y * bestHit.normal.y;
+          if (vDotN < 0) {
+            // めり込む向きの速度成分だけを反発係数付きで反転させる(接線成分は保持)
+            const factor = (1 + NAIL_RESTITUTION) * vDotN;
+            Matter.Body.setVelocity(b.body, {
+              x: v.x - factor * bestHit.normal.x,
+              y: v.y - factor * bestHit.normal.y,
+            });
+          }
+          fixedNail = bestNail;
+        }
+      }
+
+      if (!this.auditTunneling) continue;
+
+      // ---- 検証用監査: 補正後の最終位置で、解決できなかった「通過」が
+      // 残っていないか、空間分割を介さず全釘に対して確認する。
+      // 理論上は常に0件のはず(0件でなければ CCD 側にバグがあるということ)。
+      const after = b.body.position;
+      for (const nail of ALL_NAILS) {
+        if (nail === fixedNail) continue;
+        const r = BALL_RADIUS + (nail.r ?? NAIL_RADIUS);
+        if (raySegmentCircleEntry(prev, after, nail, r)) this.tunnelEscaped++;
+      }
+    }
+  }
+
+  /**
+   * 玉の速度を MAX_BALL_SPEED でクランプする(貫通対策その2、異常な速度増幅の保険)。
+   * レール走行中の玉はスクリプト制御で velocity を使わないため対象外。
+   */
+  private clampBallSpeeds(): void {
+    const maxPerStep = MAX_BALL_SPEED / (1000 / STEP_MS); // px/秒 → matterの1ステップあたりの移動量
+    const maxPerStepSq = maxPerStep * maxPerStep;
+    for (const b of this.balls) {
+      if (b.rail) continue;
+      const v = b.body.velocity;
+      const speedSq = v.x * v.x + v.y * v.y;
+      if (speedSq > maxPerStepSq) {
+        const scale = maxPerStep / Math.sqrt(speedSq);
+        Matter.Body.setVelocity(b.body, { x: v.x * scale, y: v.y * scale });
+      }
     }
   }
 

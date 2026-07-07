@@ -89,6 +89,51 @@ function formatRow(cols: (string | number)[], widths: number[]): string {
   return cols.map((c, i) => pad(c, widths[i])).join(" | ");
 }
 
+/**
+ * 貫通(tunneling)検証用ストレステスト。
+ * 強めのpower(0.7〜1.0)で数千発撃ち、CCDスイープ(src/board/layout.ts の
+ * PhysicsCore.sweepAndFixTunneling)が実際に何回「すり抜けを検出・補正した」か
+ * (fixed)と、補正しきれず実際に釘の当たり判定を素通りしてしまった回数
+ * (escaped、0に収束しているべき)を計測して表示する。
+ * fixed が実測で多数発生する(=元のバグの発生条件がこのpower帯で頻繁に
+ * 起きている)にもかかわらず escaped が0であれば、CCDスイープが実際に
+ * 貫通を防いでいることの裏付けになる。
+ */
+function runTunnelStressTest(): void {
+  console.log("======= 貫通(tunneling)ストレステスト =======");
+  const shots = 4000;
+  const powers = [0.7, 0.8, 0.9, 1.0];
+  const board = new PhysicsCore();
+  board.setTunnelAuditEnabled(true);
+
+  for (let i = 0; i < shots; i++) {
+    const power = powers[i % powers.length];
+    board.launch(power);
+    let elapsed = 0;
+    while (elapsed < LAUNCH_INTERVAL_MS) {
+      board.update(SIM_STEP_MS);
+      elapsed += SIM_STEP_MS;
+    }
+  }
+  // 残った玉が着地するまで物理を進め続ける
+  let drained = 0;
+  while (drained < DRAIN_MS && board.ballsInPlay() > 0) {
+    board.update(SIM_STEP_MS);
+    drained += SIM_STEP_MS;
+  }
+
+  const stats = board.getTunnelStats();
+  console.log(` 発射数: ${shots} (power 0.7/0.8/0.9/1.0 を巡回、強めのハンドルのみ)`);
+  console.log(` CCDスイープが「すり抜けかけ」を検出・補正した回数(fixed): ${stats.fixed}`);
+  console.log(` 補正しきれず実際に貫通が残った回数(escaped、0に収束すべき): ${stats.escaped}`);
+  console.log(
+    stats.escaped === 0
+      ? " => OK: 貫通(すり抜け)は検出されませんでした"
+      : " => 要修正: 貫通が残っています(CCDスイープの実装を見直してください)",
+  );
+  console.log("========================================================");
+}
+
 function main(): void {
   console.log("========================================================");
   console.log(" webPachi ヘッドレス回転率シミュレーション");
@@ -139,6 +184,8 @@ function main(): void {
     );
   }
   console.log("========================================================");
+
+  runTunnelStressTest();
 }
 
 main();
