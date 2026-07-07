@@ -17,10 +17,21 @@ import { PhysicsCore } from "./layout";
 import { drawBoard, type RenderState } from "./renderer";
 import { logger } from "../logger";
 import type { BoardEvent, PachinkoBoard } from "../types";
+import { DEFAULT_BOARD_DATA, type BoardData } from "./boardData";
 
-/** 盤面本体。types.ts の PachinkoBoard インターフェースを実装する */
+/**
+ * 盤面本体。types.ts の PachinkoBoard インターフェースを実装する。
+ * コンストラクタに BoardData を渡すと、盤面エディタで編集した釘配置・
+ * 役物座標で物理・描画を行う(省略時は DEFAULT_BOARD_DATA=従来の盤面)。
+ */
 export class Board implements PachinkoBoard {
-  private readonly core = new PhysicsCore();
+  private readonly core: PhysicsCore;
+  private readonly data: BoardData;
+
+  constructor(data: BoardData = DEFAULT_BOARD_DATA) {
+    this.data = data;
+    this.core = new PhysicsCore(data);
+  }
 
   launch(power: number): boolean {
     const ok = this.core.launch(power);
@@ -69,6 +80,7 @@ export class Board implements PachinkoBoard {
       windmillAngles: snap.windmillAngles,
       denchuOpen: snap.denchuOpen,
       attackerOpen: snap.attackerOpen,
+      board: this.data,
     };
     drawBoard(ctx, state);
   }

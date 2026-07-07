@@ -1,0 +1,225 @@
+/* ============================================================
+   webPachi 盤面エディタ 専用スタイル (エージェントA担当)
+   src/style.css(本編ゲーム側)とは完全に別ファイル。
+   ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: #12141c;
+  color: #e8ecf4;
+  font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+
+#editor-app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#editor-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 18px;
+  background: #1a1d29;
+  border-bottom: 1px solid #2c3040;
+}
+
+#editor-header h1 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #7ee8ff;
+}
+
+#editor-header .subtitle {
+  font-size: 12px;
+  color: #8a92a8;
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+#editor-header .back-link {
+  margin-left: auto;
+  color: #cfe8f2;
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid #3a4256;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+#editor-header .back-link:hover { background: #232838; }
+
+#editor-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px auto 300px;
+  gap: 10px;
+  padding: 10px;
+  align-items: start;
+}
+
+#editor-toolbar,
+#editor-side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 70px);
+  overflow-y: auto;
+}
+
+.panel {
+  background: #1a1d29;
+  border: 1px solid #2c3040;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.panel h2 {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: #8fd8e0;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.muted { color: #7a8296; font-size: 12px; }
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 12.5px;
+  background: #2a3244;
+  color: #e8ecf4;
+  border: 1px solid #3d4762;
+  border-radius: 5px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: #384259; }
+button:disabled { opacity: 0.4; cursor: default; }
+button.danger { border-color: #6b3040; color: #ffb4c0; }
+button.danger:hover:not(:disabled) { background: #4a2430; }
+
+.chk-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.chk-row.inline { margin-bottom: 0; }
+.chk-row .hint {
+  font-size: 10px;
+  color: #ffcf5c;
+  border: 1px solid #6b5a20;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+}
+
+.error-box {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #ffb4c0;
+  background: #331b22;
+  border: 1px solid #6b3040;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.prop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+.prop-row label,
+.prop-row .prop-label {
+  flex: 0 0 auto;
+  color: #9aa4bc;
+  min-width: 70px;
+}
+.prop-row input[type="number"],
+.prop-row input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #0f111a;
+  border: 1px solid #3d4762;
+  color: #e8ecf4;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.prop-value { color: #cfe8f2; font-weight: 600; }
+
+#prop-form #prop-delete { margin-top: 4px; width: 100%; }
+
+.sim-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-top: 6px;
+}
+.sim-table th {
+  text-align: left;
+  color: #9aa4bc;
+  font-weight: 400;
+  padding: 3px 4px;
+  border-bottom: 1px solid #262b3a;
+}
+.sim-table td {
+  text-align: right;
+  padding: 3px 4px;
+  border-bottom: 1px solid #262b3a;
+  font-variant-numeric: tabular-nums;
+}
+
+.log-view {
+  height: 140px;
+  overflow-y: auto;
+  background: #0b0d13;
+  border: 1px solid #262b3a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: "Consolas", "SF Mono", monospace;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  color: #8fd8e0;
+}
+
+#editor-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: #05070c;
+  border: 1px solid #2c3040;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+#editor-canvas {
+  width: 480px;
+  height: 660px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+@media (max-width: 1180px) {
+  #editor-body {
+    grid-template-columns: 1fr;
+  }
+  #editor-toolbar, #editor-side-panel {
+    max-height: none;
+  }
+}

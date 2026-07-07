@@ -9,6 +9,7 @@
 
 import { BALL_RADIUS, BOARD_H, BOARD_W, NAIL_RADIUS } from "../types";
 import * as L from "./layout";
+import type { BoardData } from "./boardData";
 
 /** board.ts から渡される、1フレーム分の描画用スナップショット */
 export interface RenderState {
@@ -19,6 +20,10 @@ export interface RenderState {
   windmillAngles: number[];
   denchuOpen: boolean;
   attackerOpen: boolean;
+  /** 釘・役物の座標データ(盤面エディタで編集可能な「取付部品」)。外枠・
+   * センター役物・ステージ・ワープ・アウト口などの「筐体」固定要素は
+   * これまで通り layout.ts の定数を直接参照する。 */
+  board: BoardData;
 }
 
 /** 盤面全体を描画するエントリポイント */
@@ -34,8 +39,8 @@ export function drawBoard(ctx: CanvasRenderingContext2D, s: RenderState): void {
   drawWarpEntrance(ctx);
   drawRoadNailHint(ctx);
   drawSensors(ctx, s);
-  drawNails(ctx);
-  drawWindmills(ctx, s.windmillAngles);
+  drawNails(ctx, s.board);
+  drawWindmills(ctx, s.board, s.windmillAngles);
   drawBalls(ctx, s.balls);
 
   ctx.restore();
@@ -280,9 +285,9 @@ function drawRoadNailHint(ctx: CanvasRenderingContext2D): void {
 
 // ---------------- 釘 ----------------
 
-function drawNails(ctx: CanvasRenderingContext2D): void {
+function drawNails(ctx: CanvasRenderingContext2D, board: BoardData): void {
   ctx.save();
-  for (const n of L.ALL_NAILS) {
+  for (const n of board.nails) {
     drawNail(ctx, n.x, n.y, n.r ?? NAIL_RADIUS);
   }
   ctx.restore();
@@ -315,8 +320,8 @@ function drawNail(ctx: CanvasRenderingContext2D, x: number, y: number, r: number
 
 // ---------------- 風車 ----------------
 
-function drawWindmills(ctx: CanvasRenderingContext2D, angles: number[]): void {
-  L.WINDMILLS.forEach((anchor, i) => {
+function drawWindmills(ctx: CanvasRenderingContext2D, board: BoardData, angles: number[]): void {
+  board.windmills.forEach((anchor, i) => {
     drawWindmill(ctx, anchor.x, anchor.y, angles[i] ?? 0);
   });
 }
@@ -360,20 +365,20 @@ function drawWindmill(ctx: CanvasRenderingContext2D, x: number, y: number, angle
 
 function drawSensors(ctx: CanvasRenderingContext2D, s: RenderState): void {
   drawTopNailsHint(ctx);
-  drawGate(ctx);
-  drawPockets(ctx);
-  drawHeso(ctx);
-  drawDenchu(ctx, s.denchuOpen);
-  drawAttacker(ctx, s.attackerOpen);
+  drawGate(ctx, s.board);
+  drawPockets(ctx, s.board);
+  drawHeso(ctx, s.board);
+  drawDenchu(ctx, s.board, s.denchuOpen);
+  drawAttacker(ctx, s.board, s.attackerOpen);
   drawOutZone(ctx);
 }
 
 function drawTopNailsHint(_ctx: CanvasRenderingContext2D): void {
-  // 天釘は ALL_NAILS 経由で drawNails() が描画済み。装飾追加は不要。
+  // 天釘は board.nails 経由で drawNails() が描画済み。装飾追加は不要。
 }
 
-function drawGate(ctx: CanvasRenderingContext2D): void {
-  const g = L.GATE;
+function drawGate(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  const g = board.gate;
   ctx.save();
   ctx.strokeStyle = "#7ee8ff";
   ctx.lineWidth = 2.4;
@@ -388,8 +393,8 @@ function drawGate(ctx: CanvasRenderingContext2D): void {
   ctx.restore();
 }
 
-function drawPockets(ctx: CanvasRenderingContext2D): void {
-  for (const p of L.POCKETS) {
+function drawPockets(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  for (const p of board.pockets) {
     ctx.save();
     const grad = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, L.POCKET_HALF_WIDTH);
     grad.addColorStop(0, "#062634");
@@ -405,8 +410,8 @@ function drawPockets(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-function drawHeso(ctx: CanvasRenderingContext2D): void {
-  const h = L.HESO;
+function drawHeso(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  const h = board.heso;
   ctx.save();
   const grad = ctx.createRadialGradient(h.x, h.y, 1, h.x, h.y, h.halfWidth + 6);
   grad.addColorStop(0, "#062634");
@@ -425,8 +430,8 @@ function drawHeso(ctx: CanvasRenderingContext2D): void {
   ctx.restore();
 }
 
-function drawDenchu(ctx: CanvasRenderingContext2D, open: boolean): void {
-  const d = L.DENCHU;
+function drawDenchu(ctx: CanvasRenderingContext2D, board: BoardData, open: boolean): void {
+  const d = board.denchu;
   ctx.save();
   ctx.fillStyle = open ? "#ff9f43" : "#274156";
   ctx.strokeStyle = open ? "#ffe08a" : "#4a6478";
@@ -450,8 +455,8 @@ function drawDenchu(ctx: CanvasRenderingContext2D, open: boolean): void {
   ctx.restore();
 }
 
-function drawAttacker(ctx: CanvasRenderingContext2D, open: boolean): void {
-  const a = L.ATTACKER;
+function drawAttacker(ctx: CanvasRenderingContext2D, board: BoardData, open: boolean): void {
+  const a = board.attacker;
   ctx.save();
   ctx.fillStyle = open ? "#062634" : "#3a536b";
   roundRect(ctx, a.x - a.halfWidth, a.y - 6, a.halfWidth * 2, 12, 3);

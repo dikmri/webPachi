@@ -1,8 +1,12 @@
 // =============================================================
 // 盤面レイアウト定数 + 物理コア (エージェントA担当)
-// - 釘座標・役物座標・レール形状などの「静的データ」に加えて、
-//   matter-js のワールド構築とヘッドレスな物理シミュレーション本体
-//   (PhysicsCore)をこのファイルに置く。
+// - 「筐体(外枠レール・センター役物=液晶枠の形・ステージ・ワープ・
+//   アウト口)」にあたる固定のジオメトリ・定数は従来通りこのファイルに置く。
+// - 「取付部品(釘・ヘソ・電チュー・スルーゲート・アタッカー・一般入賞口・
+//   風車)」の座標は boardData.ts の BoardData 型として外部化し、盤面
+//   エディタ(src/editor/*)から自由に編集・保存できるようにした。
+//   本ファイルはその BoardData を受け取って matter-js の世界を組み立てる
+//   だけで、座標データ自体はもう保持しない(DEFAULT_BOARD_DATA を除く)。
 // - なぜ board.ts ではなくここに置くか: board.ts は動作確認ログ用に
 //   `src/logger.ts` を import するが、logger.ts はブラウザの
 //   `window` に依存しており Node/Bun (scripts/simulate.ts) から
@@ -11,22 +15,22 @@
 //   matter-js に触れる本体ロジックは logger を一切 import しない
 //   このファイルにまとめ、board.ts はこれを薄くラップして
 //   ログ出力と Canvas 描画を付け加えるだけにする。
+// - 依存方向: layout.ts → boardData.ts の一方向(循環import防止のため、
+//   boardData.ts は layout.ts を一切 import しない)。
 // =============================================================
 
 import Matter from "matter-js";
 import { BALL_RADIUS, BOARD_H, BOARD_W, NAIL_RADIUS, type BoardEvent } from "../types";
+import { DEFAULT_BOARD_DATA, type BoardData, type NailDef } from "./boardData";
+
+// NailDef 型は boardData.ts 側の定義を再エクスポートし、既存の import 元
+// (`import { NailDef } from "./layout"` など)を壊さないようにする。
+export type { NailDef };
 
 /** 2次元ベクトル(座標)。物理エンジンに依存しない素の座標型 */
 export interface Vec2 {
   x: number;
   y: number;
-}
-
-/** 釘1本の定義(半径省略時は NAIL_RADIUS を使う) */
-export interface NailDef {
-  x: number;
-  y: number;
-  r?: number;
 }
 
 // ---------------- 汎用ジオメトリ関数 ----------------
@@ -118,7 +122,7 @@ function arcPoint(deg: number): Vec2 {
   return { x: ARC_CENTER.x + ARC_R * Math.cos(rad), y: ARC_CENTER.y + ARC_R * Math.sin(rad) };
 }
 
-// ---------------- 発射レール ----------------
+// ---------------- 発射レール(筐体固定) ----------------
 
 /** レール中心線の直線区間の始点(発射口。左壁に沿ってほぼ真上へ) */
 export const RAIL_WALL_P0: Vec2 = { x: 18, y: 668 };
@@ -208,7 +212,7 @@ export const FIELD_RIGHT_WALL: Vec2[] = [
   { x: RIGHT_JOIN.x, y: 648 },
 ];
 
-// ---------------- センター役物(液晶枠) ----------------
+// ---------------- センター役物(液晶枠。筐体固定) ----------------
 
 export const CENTER_BOX = { x0: 130, y0: 150, x1: 350, y1: 330 };
 
@@ -227,107 +231,25 @@ export const STAGE_RIGHT: [Vec2, Vec2] = [
   { x: 330, y: 346 },
 ];
 
-// ---------------- 風車 ----------------
+// ---------------- 風車(位置は取付部品=編集可能。腕の寸法・回転速度は筐体固定) ----------------
 
-export const WINDMILLS: Vec2[] = [
-  { x: 105, y: 290 },
-  { x: 375, y: 290 },
-];
-/** 風車の腕の長さ・太さ */
+/** 風車の腕の長さ・太さ(サイズは固定。位置は BoardData.windmills で編集する) */
 export const WINDMILL_ARM_LEN = 46;
 export const WINDMILL_ARM_THICK = 8;
 /** 風車の回転速度(ラジアン/秒)。左右で逆回転させる */
 export const WINDMILL_SPIN_SPEED = 1.6;
 
-// ---------------- 天釘 ----------------
+// ---------------- 「こぼしヒント線」用の固定座標(装飾のみ。釘配置とは独立) ----------------
+// renderer.ts の drawRoadNailHint が使う、道釘列のこぼし(切れ目)位置の目印線。
+// 実際の道釘座標は BoardData.nails 側で自由に編集できるが、この装飾線は
+// 常に同じ位置に固定表示する(釘配置の変更に追従させる必要はない)。
 
-/** 天釘(レール解放点の少し下、盤面最上部で玉を左右に振り分ける最初の関門) */
-export const TENKUGI: NailDef[] = [
-  { x: 216, y: 110 },
-  { x: 240, y: 106 },
-  { x: 264, y: 110 },
-];
-
-// ---------------- ヘソ周り(命釘・道釘・ジャンプ釘) ----------------
-
-/** ヘソ(スタートチャッカー) */
-export const HESO = { x: 240, y: 558, halfWidth: 11 };
-
-/**
- * 命釘(ヘソの真上で入賞率を支配する最重要の2本)。
- * gap は中心間隔。値を狭めるほどヘソに入りにくくなる(=回転率が落ちる)。
- * ここを scripts/simulate.ts の結果を見ながら調整する。
- */
-export const INNAIL_GAP = 70;
-export const INNAIL_Y = 540;
-export const INNAILS: NailDef[] = [
-  { x: HESO.x - INNAIL_GAP / 2, y: INNAIL_Y },
-  { x: HESO.x + INNAIL_GAP / 2, y: INNAIL_Y },
-];
-
-/**
- * 道釘(左下から玉を右へ転がす釘の水平列)。
- * 間隔を玉の直径(11)より狭くすることで隙間を落下できないようにし、
- * 玉が釘の上を転がっていく挙動を作る。右へ行くほどわずかに下がる緩斜面。
- * 列の途中に1箇所だけ釘を間引いた「こぼし」の切れ目を作る。
- */
 export const ROAD_NAIL_X_START = 40;
 export const ROAD_NAIL_X_END = 224;
-export const ROAD_NAIL_COUNT = 14;
-export const ROAD_NAIL_GAP_INDEX = 6; // このインデックスの釘を間引く(こぼし)
 export const ROAD_NAIL_Y_START = 546;
 export const ROAD_NAIL_Y_END = 566;
 
-/** 道釘列を1本生成する汎用ビルダー(左右で始点・終点だけを反転して共用する) */
-function buildRoadNails(xStart: number, xEnd: number): NailDef[] {
-  const nails: NailDef[] = [];
-  for (let i = 0; i < ROAD_NAIL_COUNT; i++) {
-    if (i === ROAD_NAIL_GAP_INDEX) continue; // こぼしの切れ目
-    const t = i / (ROAD_NAIL_COUNT - 1);
-    const x = xStart + (xEnd - xStart) * t;
-    const y = ROAD_NAIL_Y_START + (ROAD_NAIL_Y_END - ROAD_NAIL_Y_START) * t;
-    nails.push({ x, y });
-  }
-  return nails;
-}
-
-export const ROAD_NAILS: NailDef[] = buildRoadNails(ROAD_NAIL_X_START, ROAD_NAIL_X_END);
-
-/** ジャンプ釘: 道釘列の終端で玉を跳ねさせ、命釘の間へ送り込む */
-export const JUMP_NAIL: NailDef = { x: 220, y: 542 };
-
-/**
- * 右側の道釘列(左側と左右対称のミラー配置)。
- * レール解放点(右上)が power によって x=150〜340 付近まで広く散らばるため、
- * 右側に落ちた玉にもヘソへ戻る経路を用意しないと、片側の経路だけでは
- * 回転率が低くなりすぎる。命釘の間(HESO.x 中央)へ向けて左と対称に送り込む。
- */
-export const ROAD_NAIL_X_START_R = HESO.x * 2 - ROAD_NAIL_X_START; // 440
-export const ROAD_NAIL_X_END_R = HESO.x * 2 - ROAD_NAIL_X_END; // 256
-
-export const ROAD_NAILS_RIGHT: NailDef[] = buildRoadNails(ROAD_NAIL_X_START_R, ROAD_NAIL_X_END_R);
-
-/** ジャンプ釘(右側、左と対称) */
-export const JUMP_NAIL_RIGHT: NailDef = { x: HESO.x * 2 - JUMP_NAIL.x, y: JUMP_NAIL.y };
-
-// ---------------- 電チュー・スルーゲート・アタッカー ----------------
-
-/** 電チュー(ヘソ直下)。閉時は素通り、開時のみ入賞判定する(センサー自体は常設) */
-export const DENCHU = { x: 240, y: 590, halfWidth: 11 };
-
-/** スルーゲート(左道中) */
-export const GATE = { x: 100, y: 340, halfWidth: 9 };
-
-/** アタッカー(大入賞口) */
-export const ATTACKER = { x: 240, y: 616, halfWidth: 28 };
-
-/** 一般入賞口(左下3個) */
-export const POCKETS: NailDef[] = [
-  { x: 60, y: 600 },
-  { x: 85, y: 614 },
-  { x: 110, y: 624 },
-];
-export const POCKET_HALF_WIDTH = 6;
+// ---------------- アウト口(筐体固定) ----------------
 
 /**
  * アウト口(最下部。入賞しなかった玉をすべて回収する幅広センサー)。
@@ -336,187 +258,25 @@ export const POCKET_HALF_WIDTH = 6;
  */
 export const OUT_ZONE = { x: 245, y: 650, halfWidth: 205 };
 
-// ---------------- 縁釘(外周に沿った釘列) ----------------
-
-/**
- * 折れ線 path に沿って弧長 spacing 間隔で点をサンプリングし、その位置から
- * 法線方向に inset だけ内側(center 側)へオフセットした釘座標列を返す。
- * 実機の「外側の誘導レールのすぐ内側に一列に並ぶ縁釘」を機械的に生成する
- * ための汎用ヘルパー(railPointAt と同じ弧長パラメトリック補間を使う)。
- */
-function edgeNailsAlong(path: Vec2[], spacing: number, inset: number, center: Vec2): NailDef[] {
-  const cum = cumulativeLength(path);
-  const total = cum[cum.length - 1];
-  const nails: NailDef[] = [];
-  for (let d = spacing / 2; d < total; d += spacing) {
-    let i = 1;
-    while (i < cum.length - 1 && cum[i] < d) i++;
-    const d0 = cum[i - 1];
-    const d1 = cum[i];
-    const segLen = d1 - d0 || 1;
-    const t = (d - d0) / segLen;
-    const p0 = path[i - 1];
-    const p1 = path[i];
-    const px = p0.x + (p1.x - p0.x) * t;
-    const py = p0.y + (p1.y - p0.y) * t;
-    let tx = p1.x - p0.x;
-    let ty = p1.y - p0.y;
-    const tl = Math.hypot(tx, ty) || 1;
-    tx /= tl;
-    ty /= tl;
-    // 接線を90度回転させた法線候補から、中心へ向かう向き(内側)を選ぶ
-    let nx = -ty;
-    let ny = tx;
-    const toCenterX = center.x - px;
-    const toCenterY = center.y - py;
-    if (nx * toCenterX + ny * toCenterY < 0) {
-      nx = -nx;
-      ny = -ny;
-    }
-    nails.push({ x: px + nx * inset, y: py + ny * inset });
-  }
-  return nails;
-}
-
-/** 縁釘の間隔(弧長)・外壁からの内側オフセット */
-const EDGE_NAIL_SPACING = 26;
-const EDGE_NAIL_INSET = 15;
-
-/**
- * 上部円弧のうち「発射レールの内壁」に相当する区間(左合流点→解放点)。
- * ここは解放点より手前なのでレール内壁自体は物理ボディを持たないが、
- * 解放点から先の開放された盤面と滑らかに繋がる縁釘の基準線として使う。
- */
-const TOP_ARC_CENTERLINE = sampleArc(ARC_CENTER.x, ARC_CENTER.y, ARC_R, ARC_LEFT_DEG, ARC_RELEASE_DEG, RAIL_SEGMENTS);
-const TOP_ARC_INNER = offsetPolyline(TOP_ARC_CENTERLINE, RAIL_WIDTH / 2, ARC_CENTER, false);
-
-/**
- * 外周に沿った縁釘列(上部円弧の左肩〜解放点〜右肩〜右辺を下って最下部近くまで)。
- * 実機の「外側の誘導レールのすぐ内側に上から左右両サイドまでずっと並ぶ釘列」
- * を再現し、盤面外周がスカスカに見える問題を解消する。強めのハンドルで
- * 右壁沿いを転がる「右打ちルート」の土台にもなる。
- */
-const EDGE_NAILS_RAW: NailDef[] = [
-  ...edgeNailsAlong(TOP_ARC_INNER, EDGE_NAIL_SPACING, EDGE_NAIL_INSET, ARC_CENTER),
-  ...edgeNailsAlong(FIELD_RIGHT_WALL, EDGE_NAIL_SPACING, EDGE_NAIL_INSET, ARC_CENTER),
-];
-
-// ---------------- 上部〜中段の密な釘field(千鳥格子) ----------------
-
-/**
- * 天井付近から風車周りにかけての密な釘field。実機らしい「均等な間隔で
- * 規則正しく並ぶが、経路によって微妙に振り分けが変わる」千鳥格子
- * (スタッガード配置)を機械的に生成する。中央液晶(CENTER_BOX)と風車の
- * 可動域は避ける。
- */
-function buildStaggeredField(): NailDef[] {
-  const rowSpacingY = 24;
-  const colSpacingX = 26;
-  const yStart = 122;
-  const yEnd = 334;
-  const xStart = 44;
-  const xEnd = 422;
-  const boxMargin = 16;
-  const windmillClearance = 32;
-
-  const nails: NailDef[] = [];
-  let row = 0;
-  for (let y = yStart; y <= yEnd; y += rowSpacingY, row++) {
-    const offset = row % 2 === 0 ? 0 : colSpacingX / 2;
-    for (let x = xStart + offset; x <= xEnd; x += colSpacingX) {
-      const insideBox =
-        x > CENTER_BOX.x0 - boxMargin && x < CENTER_BOX.x1 + boxMargin && y > CENTER_BOX.y0 - boxMargin && y < CENTER_BOX.y1 + boxMargin;
-      if (insideBox) continue;
-      const nearWindmill = WINDMILLS.some((w) => Math.hypot(x - w.x, y - w.y) < windmillClearance);
-      if (nearWindmill) continue;
-      nails.push({ x, y });
-    }
-  }
-  return nails;
-}
-
-const STAGGERED_FIELD_RAW: NailDef[] = buildStaggeredField();
-
-// ---------------- 袖釘(センター役物まわりの「ハの字」漏斗) ----------------
-
-/**
- * センター役物(液晶枠)の左下・右下のすぐ外側に置く「袖釘」。
- * 液晶の角に沿って落ちてきた玉を、ハの字(上ほど役物に近く、下へ行くほど
- * 外側へ開く)に受け止めて自然に下段の寄せ釘・道釘へ引き継がせる。
- */
-export const SODE_NAILS: NailDef[] = [
-  { x: 116, y: 336 },
-  { x: 104, y: 358 },
-  { x: 96, y: 382 },
-  { x: 364, y: 336 },
-  { x: 376, y: 358 },
-  { x: 384, y: 382 },
-];
-
-/**
- * 袖釘を抜けた玉を命釘・道釘・ヘソへ収束させる下段の寄せ釘。
- * 左右対称に、下へ行くほど中央(ヘソ)側へ寄っていく「漏斗」を形成する。
- */
-export const CONVERGE_NAILS: NailDef[] = [
-  { x: 74, y: 408 },
-  { x: 112, y: 416 },
-  { x: 150, y: 428 },
-  { x: 62, y: 452 },
-  { x: 100, y: 464 },
-  { x: 140, y: 476 },
-  { x: 86, y: 500 },
-  { x: 122, y: 510 },
-  { x: 406, y: 408 },
-  { x: 368, y: 416 },
-  { x: 330, y: 428 },
-  { x: 418, y: 452 },
-  { x: 380, y: 464 },
-  { x: 340, y: 476 },
-  { x: 394, y: 500 },
-  { x: 358, y: 510 },
-];
-
-/**
- * 命釘・道釘・ジャンプ釘・袖釘・寄せ釘は入賞率チューニング上の意味を持つ
- * 「機能釘」として扱い、座標を厳密に管理する。縁釘・千鳥格子はこれらに
- * 近すぎる場合(見た目上の重なり・玉が挟まる隙間になる)は間引く。
- */
-const FUNCTIONAL_NAILS: NailDef[] = [
-  ...INNAILS,
-  ...SODE_NAILS,
-  ...CONVERGE_NAILS,
-  ...ROAD_NAILS,
-  ...ROAD_NAILS_RIGHT,
-  JUMP_NAIL,
-  JUMP_NAIL_RIGHT,
-];
-/** 機能釘とこれ未満の距離になる縁釘/千鳥格子釘は間引く(px) */
-const NAIL_MIN_CLEARANCE = 11;
-
-function farEnoughFromFunctional(n: NailDef): boolean {
-  return FUNCTIONAL_NAILS.every((o) => Math.hypot(n.x - o.x, n.y - o.y) >= NAIL_MIN_CLEARANCE);
-}
-
-/** 縁釘(機能釘と近すぎるものを間引いた最終版) */
-export const EDGE_NAILS: NailDef[] = EDGE_NAILS_RAW.filter(farEnoughFromFunctional);
-/** 千鳥格子の密な釘field(機能釘と近すぎるものを間引いた最終版) */
-export const STAGGERED_FIELD: NailDef[] = STAGGERED_FIELD_RAW.filter(farEnoughFromFunctional);
-
-/**
- * 物理ボディを作る釘の全リスト。
- * 縁釘(外周)+千鳥格子(上部〜中段の密な釘field)+天釘+命釘+袖釘+寄せ釘+
- * 道釘(左右)+ジャンプ釘(左右)。合計本数は概ね130〜150本程度になる
- * (実機の「密な釘盤」らしさを狙いつつ、シミュレーション負荷とのバランスも考慮)。
- */
-export const ALL_NAILS: NailDef[] = [
-  ...EDGE_NAILS,
-  ...STAGGERED_FIELD,
-  ...TENKUGI,
-  ...FUNCTIONAL_NAILS,
-];
+/** 一般入賞口の当たり判定幅(サイズは固定。座標は BoardData.pockets で編集する) */
+export const POCKET_HALF_WIDTH = 6;
 
 // 型チェック用: BOARD_W/BOARD_H を使っていることを明示(範囲外に出ていないかの目安)
 export const BOARD_BOUNDS = { w: BOARD_W, h: BOARD_H };
+
+// ---------------- 後方互換用エイリアス ----------------
+// 従来 layout.ts がモジュール定数として直接エクスポートしていた
+// 釘・役物データは boardData.ts の DEFAULT_BOARD_DATA に移植した。
+// 既存コード(ツール類等)からの参照を壊さないよう、同名のエイリアスとして
+// 再エクスポートしておく。実際の物理構築・描画は必ず引数で渡された
+// BoardData を使うこと(このエイリアスは「デフォルト値」の参照専用)。
+export const ALL_NAILS: NailDef[] = DEFAULT_BOARD_DATA.nails;
+export const HESO = DEFAULT_BOARD_DATA.heso;
+export const DENCHU = DEFAULT_BOARD_DATA.denchu;
+export const GATE = DEFAULT_BOARD_DATA.gate;
+export const ATTACKER = DEFAULT_BOARD_DATA.attacker;
+export const POCKETS = DEFAULT_BOARD_DATA.pockets;
+export const WINDMILLS = DEFAULT_BOARD_DATA.windmills;
 
 // =============================================================
 // 物理コア(ヘッドレス)
@@ -625,8 +385,11 @@ export interface PhysicsSnapshot {
 /**
  * DOM 非依存の世界構築関数。matter-js の Engine/World と釘・役物・
  * レール・風車のボディをすべて組み立てる。Render は一切生成しない。
+ * 釘・ヘソ・電チュー・ゲート・アタッカー・一般入賞口・風車の座標・個数は
+ * すべて引数 data(BoardData)から読む。外枠・センター役物・ステージ・
+ * ワープ・アウト口は筐体固定なのでこのファイルの定数を直接使う。
  */
-export function createWorld(): {
+export function createWorld(data: BoardData): {
   engine: Matter.Engine;
   world: Matter.World;
   windmills: WindmillState[];
@@ -671,8 +434,8 @@ export function createWorld(): {
   const warp = WARP_ENTRANCE;
   bodies.push(sensorRect(warp.x, warp.y, warp.w, warp.h, "warp"));
 
-  // ---- 釘(縁釘・千鳥格子・天釘・命釘・道釘・ジャンプ釘・袖釘・寄せ釘 すべて) ----
-  for (const n of ALL_NAILS) {
+  // ---- 釘(縁釘・千鳥格子・天釘・命釘・道釘・ジャンプ釘・袖釘・寄せ釘 すべて。data由来) ----
+  for (const n of data.nails) {
     bodies.push(
       Matter.Bodies.circle(n.x, n.y, n.r ?? NAIL_RADIUS, {
         isStatic: true,
@@ -683,18 +446,18 @@ export function createWorld(): {
     );
   }
 
-  // ---- 入賞センサー類(常設。開閉が必要なものはロジック側でゲートする) ----
-  bodies.push(sensorRect(HESO.x, HESO.y, HESO.halfWidth * 2, 10, "heso"));
-  bodies.push(sensorRect(DENCHU.x, DENCHU.y, DENCHU.halfWidth * 2, 10, "denchu"));
-  bodies.push(sensorRect(GATE.x, GATE.y, GATE.halfWidth * 2, 8, "gate"));
-  bodies.push(sensorRect(ATTACKER.x, ATTACKER.y, ATTACKER.halfWidth * 2, 12, "attacker"));
-  POCKETS.forEach((p, i) => bodies.push(sensorRect(p.x, p.y, POCKET_HALF_WIDTH * 2, 10, `pocket${i}`)));
+  // ---- 入賞センサー類(常設。開閉が必要なものはロジック側でゲートする。座標はdata由来) ----
+  bodies.push(sensorRect(data.heso.x, data.heso.y, data.heso.halfWidth * 2, 10, "heso"));
+  bodies.push(sensorRect(data.denchu.x, data.denchu.y, data.denchu.halfWidth * 2, 10, "denchu"));
+  bodies.push(sensorRect(data.gate.x, data.gate.y, data.gate.halfWidth * 2, 8, "gate"));
+  bodies.push(sensorRect(data.attacker.x, data.attacker.y, data.attacker.halfWidth * 2, 12, "attacker"));
+  data.pockets.forEach((p, i) => bodies.push(sensorRect(p.x, p.y, POCKET_HALF_WIDTH * 2, 10, `pocket${i}`)));
   bodies.push(sensorRect(OUT_ZONE.x, OUT_ZONE.y, OUT_ZONE.halfWidth * 2, 16, "out"));
 
   Matter.Composite.add(world, bodies);
 
-  // ---- 風車(コンパウンドボディ。アンカーにピン留めしつつ一定回転させる) ----
-  const windmills: WindmillState[] = WINDMILLS.map((anchor, i) => {
+  // ---- 風車(コンパウンドボディ。アンカーにピン留めしつつ一定回転させる。位置はdata由来) ----
+  const windmills: WindmillState[] = data.windmills.map((anchor, i) => {
     const armH = Matter.Bodies.rectangle(anchor.x, anchor.y, WINDMILL_ARM_LEN, WINDMILL_ARM_THICK, {
       label: "windmill",
     });
@@ -780,8 +543,9 @@ function buildWallChain(points: Vec2[], thickness: number, restitution: number):
 
 /**
  * 釘を格子状のバケツに登録する簡易空間分割。釘は静的でゲーム中に増減しない
- * ため、コンストラクタで1回だけ構築して使い回す。玉のスイープ線分の周囲
- * 一定距離内の釘だけに絞り込むことで、釘数×玉数の総当たりを避ける。
+ * ため、PhysicsCore のコンストラクタで(渡された BoardData.nails から)1回だけ
+ * 構築して使い回す。玉のスイープ線分の周囲一定距離内の釘だけに絞り込むことで、
+ * 釘数×玉数の総当たりを避ける。
  */
 class NailGrid {
   private readonly cells = new Map<string, NailDef[]>();
@@ -826,8 +590,6 @@ class NailGrid {
 const NAIL_GRID_CELL_SIZE = 40;
 /** 玉のスイープ矩形に足す余白(px)。1ステップの最大移動量+釘半径+玉半径に余裕を持たせた値 */
 const NAIL_SWEEP_MARGIN = 30;
-/** 釘専用の空間分割インデックス(ALL_NAILS 確定後に1回だけ構築) */
-const NAIL_GRID = new NailGrid(ALL_NAILS, NAIL_GRID_CELL_SIZE);
 
 interface TunnelHit {
   /** 線分上の交点パラメータ(0..1)。複数釘がヒットした場合、最小のものを採用する */
@@ -886,11 +648,18 @@ function raySegmentCircleEntry(p0: Vec2, p1: Vec2, center: Vec2, r: number): Tun
  *   風車のモーター駆動・詰まり玉の強制回収を行う。
  * - logger も Canvas も一切扱わない(scripts/simulate.ts から直接使える)。
  * - board.ts の Board クラスはこれをラップし、ログ出力と描画だけを足す。
+ * - コンストラクタに BoardData を渡すことで、盤面エディタで編集した
+ *   釘配置・役物座標をそのまま物理演算に反映できる(省略時は
+ *   DEFAULT_BOARD_DATA を使う=従来通りの盤面)。
  */
 export class PhysicsCore {
   private readonly engine: Matter.Engine;
   private readonly world: Matter.World;
   private readonly windmills: WindmillState[];
+  /** 構築に使った BoardData(CCDスイープが参照する釘一覧など) */
+  private readonly data: BoardData;
+  /** 釘専用の空間分割インデックス(渡された data.nails から1回だけ構築) */
+  private readonly nailGrid: NailGrid;
 
   private balls: BallTrack[] = [];
   private events: BoardEvent[] = [];
@@ -916,11 +685,13 @@ export class PhysicsCore {
    */
   private auditTunneling = false;
 
-  constructor() {
-    const w = createWorld();
+  constructor(data: BoardData = DEFAULT_BOARD_DATA) {
+    this.data = data;
+    const w = createWorld(data);
     this.engine = w.engine;
     this.world = w.world;
     this.windmills = w.windmills;
+    this.nailGrid = new NailGrid(data.nails, NAIL_GRID_CELL_SIZE);
     Matter.Events.on(this.engine, "collisionStart", (e) => this.handleCollisions(e));
   }
 
@@ -1055,7 +826,7 @@ export class PhysicsCore {
    * 最初に交差する釘(t が最小)の接触点まで玉を押し戻し、法線方向に
    * 反発係数を考慮して速度を反射させる。
    *
-   * 加えて、auditTunneling が有効な場合のみ、空間分割を介さず ALL_NAILS
+   * 加えて、auditTunneling が有効な場合のみ、空間分割を介さず data.nails
    * 全体に対して「補正後もなお貫通が残っていないか」を監査する
    * (検証用。ストレステストで tunnelEscaped が 0 に収束することを確認する)。
    */
@@ -1066,7 +837,7 @@ export class PhysicsCore {
       if (!prev || b.rail) continue;
 
       const cur = { x: b.body.position.x, y: b.body.position.y };
-      const candidates = NAIL_GRID.queryRect(
+      const candidates = this.nailGrid.queryRect(
         Math.min(prev.x, cur.x) - NAIL_SWEEP_MARGIN,
         Math.min(prev.y, cur.y) - NAIL_SWEEP_MARGIN,
         Math.max(prev.x, cur.x) + NAIL_SWEEP_MARGIN,
@@ -1113,7 +884,7 @@ export class PhysicsCore {
       // 残っていないか、空間分割を介さず全釘に対して確認する。
       // 理論上は常に0件のはず(0件でなければ CCD 側にバグがあるということ)。
       const after = b.body.position;
-      for (const nail of ALL_NAILS) {
+      for (const nail of this.data.nails) {
         if (nail === fixedNail) continue;
         const r = BALL_RADIUS + (nail.r ?? NAIL_RADIUS);
         if (raySegmentCircleEntry(prev, after, nail, r)) this.tunnelEscaped++;
@@ -1236,39 +1007,28 @@ export class PhysicsCore {
       }
       if (!ball || !other) continue;
 
-      switch (other.label) {
-        case "heso":
-          this.removeBall(ball, { type: "heso" });
-          break;
-        case "denchu":
-          if (this.denchuOpen) this.removeBall(ball, { type: "denchu" });
-          break;
-        case "attacker":
-          if (this.attackerOpen) this.removeBall(ball, { type: "attacker" });
-          break;
-        case "gate": {
-          const last = this.gateCooldown.get(ball.id) ?? -Infinity;
-          if (this.simTimeMs - last > 300) {
-            this.gateCooldown.set(ball.id, this.simTimeMs);
-            this.events.push({ type: "gate" });
-          }
-          break;
+      if (other.label === "heso") {
+        this.removeBall(ball, { type: "heso" });
+      } else if (other.label === "denchu") {
+        if (this.denchuOpen) this.removeBall(ball, { type: "denchu" });
+      } else if (other.label === "attacker") {
+        if (this.attackerOpen) this.removeBall(ball, { type: "attacker" });
+      } else if (other.label === "gate") {
+        const last = this.gateCooldown.get(ball.id) ?? -Infinity;
+        if (this.simTimeMs - last > 300) {
+          this.gateCooldown.set(ball.id, this.simTimeMs);
+          this.events.push({ type: "gate" });
         }
-        case "pocket0":
-        case "pocket1":
-        case "pocket2":
-          this.removeBall(ball, { type: "pocket" });
-          break;
-        case "out":
-          this.removeBall(ball, { type: "out" });
-          break;
-        case "warp":
-          // ワープ入賞: ステージへ転送(得点イベントは発生しない)
-          Matter.Body.setPosition(ball, { x: WARP_TARGET.x, y: WARP_TARGET.y });
-          Matter.Body.setVelocity(ball, { x: 0.6, y: 0 });
-          break;
-        default:
-          break;
+      } else if (other.label.startsWith("pocket")) {
+        // pocket0/pocket1/... : BoardData.pockets は個数が可変(エディタでの
+        // 座標編集を許すため)なので、ラベルの前方一致で判定する。
+        this.removeBall(ball, { type: "pocket" });
+      } else if (other.label === "out") {
+        this.removeBall(ball, { type: "out" });
+      } else if (other.label === "warp") {
+        // ワープ入賞: ステージへ転送(得点イベントは発生しない)
+        Matter.Body.setPosition(ball, { x: WARP_TARGET.x, y: WARP_TARGET.y });
+        Matter.Body.setVelocity(ball, { x: 0.6, y: 0 });
       }
     }
   }

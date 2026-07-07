@@ -8,11 +8,33 @@
 import { SPEC, type BoardEvent, type PlayerState, type Stats } from "./types";
 import { logger } from "./logger";
 import { Board } from "./board/board";
+import { BOARD_DATA_STORAGE_KEY, DEFAULT_BOARD_DATA, isValidBoardData, type BoardData } from "./board/boardData";
 import { PachinkoGame } from "./game/stateMachine";
 import { Reels } from "./game/reels";
 import { DataCounterUI } from "./ui/dataCounter";
 import { Frame } from "./ui/frame";
 import { SoundEngine } from "./audio/audio";
+
+/**
+ * 盤面エディタ(editor.html)で編集・保存された BoardData を localStorage から
+ * 読み込む。無い/不正な場合はデフォルト盤面(DEFAULT_BOARD_DATA)を使う。
+ */
+function loadBoardData(): BoardData {
+  try {
+    const raw = localStorage.getItem(BOARD_DATA_STORAGE_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (isValidBoardData(parsed)) {
+        logger.log("main", `盤面エディタの保存データを読み込みました(釘${parsed.nails.length}本)`);
+        return parsed;
+      }
+      logger.log("main", "保存された盤面データが不正な形式のため、デフォルト盤面を使用します");
+    }
+  } catch (err) {
+    logger.error(`盤面データの読み込みでエラー: ${err}`);
+  }
+  return DEFAULT_BOARD_DATA;
+}
 
 // ---------------- DOM取得 ----------------
 
@@ -34,7 +56,7 @@ logger.log("main", "起動開始");
 
 // ---------------- モジュール生成 ----------------
 
-const board = new Board();
+const board = new Board(loadBoardData());
 const game = new PachinkoGame();
 const reels = new Reels();
 const dataCounter = new DataCounterUI();

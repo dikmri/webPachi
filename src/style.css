@@ -114,6 +114,17 @@ html, body {
   border-bottom: 1px solid #333;
 }
 
+#editor-link {
+  margin-left: auto;
+  color: #ffd479;
+  font-size: 11px;
+  text-decoration: none;
+  border: 1px solid #665;
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+#editor-link:hover { background: #263048; }
+
 #debug-head button {
   background: #263048;
   color: #dde;
