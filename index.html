@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>webPachi - P ドリームオーシャン99</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="hall">
+        <!-- データカウンター(ホールの呼び出しランプ) : ui/dataCounter.ts が中身を構築 -->
+        <div id="data-counter"></div>
+
+        <!-- パチンコ台本体 -->
+        <div id="machine">
+          <div id="machine-top"><span id="machine-name">P ドリームオーシャン 99ver.</span></div>
+          <div id="board-wrap">
+            <canvas id="board-canvas" width="480" height="660"></canvas>
+            <!-- 液晶(図柄) : game/reels.ts が中身を構築 -->
+            <div id="lcd"></div>
+            <!-- 保留表示 : game/reels.ts が中身を構築 -->
+            <div id="hold"></div>
+          </div>
+          <!-- 上皿・貸玉・持ち玉 : ui/frame.ts が中身を構築 -->
+          <div id="tray"></div>
+          <!-- ハンドル : ui/frame.ts が中身を構築 -->
+          <div id="handle-area"></div>
+        </div>
+
+        <!-- デバッグ/動作確認ログパネル -->
+        <div id="debug-panel">
+          <div id="debug-head">
+            <span>動作ログ</span>
+            <button id="log-dl">ログをダウンロード</button>
+            <button id="mute-btn">🔊</button>
+          </div>
+          <div id="log-view"></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
