@@ -73,6 +73,62 @@
           </section>
 
           <section class="panel">
+            <h2>障害物</h2>
+
+            <h3>バー配置</h3>
+            <div class="prop-row">
+              <label for="new-bar-thickness">厚み(px)</label>
+              <input type="number" id="new-bar-thickness" step="0.5" min="1" value="6" />
+            </div>
+            <div class="prop-row">
+              <label for="new-bar-restitution">反発係数(空欄=既定)</label>
+              <input type="number" id="new-bar-restitution" step="0.05" min="0" placeholder="0.42" />
+            </div>
+            <div class="btn-row">
+              <button id="btn-bar-tool">バー配置</button>
+            </div>
+            <p id="bar-tool-hint" class="muted" style="display: none">
+              バー配置モード: キャンバス上で始点→終点の順にクリックしてください(Escで始点をキャンセル)。
+            </p>
+
+            <h3>回転体配置</h3>
+            <div class="prop-row">
+              <label for="new-spinner-length">長さ(px)</label>
+              <input type="number" id="new-spinner-length" step="1" min="4" value="40" />
+            </div>
+            <div class="prop-row">
+              <label for="new-spinner-thickness">太さ(px)</label>
+              <input type="number" id="new-spinner-thickness" step="0.5" min="1" value="8" />
+            </div>
+            <div class="prop-row">
+              <label for="new-spinner-speed">回転速度(rad/s)</label>
+              <input type="number" id="new-spinner-speed" step="0.1" value="1.5" />
+            </div>
+            <div class="btn-row">
+              <button id="btn-spinner-tool">回転体配置</button>
+            </div>
+            <p id="spinner-tool-hint" class="muted" style="display: none">
+              回転体配置モード: キャンバス上をクリックすると、その場所に回転体を1個配置します。
+            </p>
+
+            <h3>カーブ配置</h3>
+            <div class="prop-row">
+              <label for="new-curve-thickness">厚み(px)</label>
+              <input type="number" id="new-curve-thickness" step="0.5" min="1" value="6" />
+            </div>
+            <div class="prop-row">
+              <label for="new-curve-restitution">反発係数(空欄=既定)</label>
+              <input type="number" id="new-curve-restitution" step="0.05" min="0" placeholder="0.42" />
+            </div>
+            <div class="btn-row">
+              <button id="btn-curve-tool">カーブ配置</button>
+            </div>
+            <p id="curve-tool-hint" class="muted" style="display: none">
+              カーブ配置モード: 始点→制御点→終点の順に3回クリックしてください(Escでキャンセル)。
+            </p>
+          </section>
+
+          <section class="panel">
             <h2>プロパティ</h2>
             <p id="prop-none" class="muted">釘または役物をクリックして選択してください。</p>
             <div id="prop-form" style="display: none">
@@ -80,11 +136,11 @@
                 <span class="prop-label">種類</span>
                 <span id="prop-kind" class="prop-value"></span>
               </div>
-              <div class="prop-row">
+              <div class="prop-row" id="prop-x-row">
                 <label for="prop-x">x</label>
                 <input type="number" id="prop-x" step="0.5" />
               </div>
-              <div class="prop-row">
+              <div class="prop-row" id="prop-y-row">
                 <label for="prop-y">y</label>
                 <input type="number" id="prop-y" step="0.5" />
               </div>
@@ -96,6 +152,59 @@
                 <label for="prop-hw">半幅</label>
                 <input type="number" id="prop-hw" step="0.5" />
               </div>
+
+              <!-- バー専用: 両端点・厚み・反発係数(x/yの共通欄は使わない) -->
+              <div id="prop-bar-form" style="display: none">
+                <div class="prop-row">
+                  <label for="prop-bar-x1">x1</label>
+                  <input type="number" id="prop-bar-x1" step="0.5" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-bar-y1">y1</label>
+                  <input type="number" id="prop-bar-y1" step="0.5" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-bar-x2">x2</label>
+                  <input type="number" id="prop-bar-x2" step="0.5" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-bar-y2">y2</label>
+                  <input type="number" id="prop-bar-y2" step="0.5" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-bar-thickness">厚み</label>
+                  <input type="number" id="prop-bar-thickness" step="0.5" min="1" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-bar-restitution">反発係数(空欄=既定)</label>
+                  <input type="number" id="prop-bar-restitution" step="0.05" min="0" placeholder="0.42" />
+                </div>
+              </div>
+
+              <!-- 回転体専用: 長さ・太さ・回転速度(x/yは上の共通欄で編集する) -->
+              <div id="prop-spinner-form" style="display: none">
+                <div class="prop-row">
+                  <label for="prop-spinner-length">長さ</label>
+                  <input type="number" id="prop-spinner-length" step="1" min="4" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-spinner-thickness">太さ</label>
+                  <input type="number" id="prop-spinner-thickness" step="0.5" min="1" />
+                </div>
+                <div class="prop-row">
+                  <label for="prop-spinner-speed">回転速度(rad/s)</label>
+                  <input type="number" id="prop-spinner-speed" step="0.1" />
+                </div>
+              </div>
+
+              <!-- カーブ専用: 選択中の制御点の厚み(x/yは上の共通欄で編集する) -->
+              <div id="prop-curve-form" style="display: none">
+                <div class="prop-row">
+                  <label for="prop-curve-thickness">厚み</label>
+                  <input type="number" id="prop-curve-thickness" step="0.5" min="1" />
+                </div>
+              </div>
+
               <button id="prop-delete" class="danger" disabled>削除 (Delete)</button>
             </div>
           </section>

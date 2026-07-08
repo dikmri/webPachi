@@ -21,7 +21,14 @@
 
 import Matter from "matter-js";
 import { BALL_RADIUS, BOARD_H, BOARD_W, NAIL_RADIUS, type BoardEvent } from "../types";
-import { DEFAULT_BOARD_DATA, type BoardData, type NailDef } from "./boardData";
+import {
+  DEFAULT_BOARD_DATA,
+  type BarObstacle,
+  type BoardData,
+  type CurveObstacle,
+  type NailDef,
+  type SpinnerObstacle,
+} from "./boardData";
 
 // NailDef 型は boardData.ts 側の定義を再エクスポートし、既存の import 元
 // (`import { NailDef } from "./layout"` など)を壊さないようにする。
@@ -376,6 +383,19 @@ interface WindmillState {
 }
 
 /**
+ * 回転体(スピナー)1本分の状態。既存の風車(WindmillState)と全く同じ
+ * パターン(アンカーに固定しつつ一定角速度で回転させる)だが、腕が1本だけの
+ * 単純な形状で、位置・長さ・太さ・回転速度がすべて BoardData.spinners から
+ * 自由に設定できる点が風車と異なる。
+ */
+interface SpinnerState {
+  body: Matter.Body;
+  anchor: Vec2;
+  /** ラジアン/秒。符号で回転方向(正負)を表す */
+  spin: number;
+}
+
+/**
  * レール上昇中の玉が持つ「レール上の距離・残り速度」。
  * null になった時点で通常の matter-js 物理(重力・衝突)に完全移行する。
  */
@@ -407,6 +427,8 @@ export interface PhysicsSnapshot {
   timeMs: number;
   balls: { x: number; y: number; angle: number }[];
   windmillAngles: number[];
+  /** 回転体(スピナー)それぞれの現在角度(ラジアン)。renderer側の回転描画に使う */
+  spinnerAngles: number[];
   denchuOpen: boolean;
   attackerOpen: boolean;
 }
@@ -422,6 +444,7 @@ export function createWorld(data: BoardData): {
   engine: Matter.Engine;
   world: Matter.World;
   windmills: WindmillState[];
+  spinners: SpinnerState[];
 } {
   // 貫通対策その3: positionIterations/velocityIterations を既定値(6/4)より
   // 引き上げ、衝突解決の精度を上げる(重なり解消・速度解決をより正確に行う)。
@@ -494,6 +517,16 @@ export function createWorld(data: BoardData): {
     );
   }
 
+  // ---- バー(棒状の直線障害物。data.bars由来。玉が跳ね返るだけの単純な静的障害物) ----
+  for (const bar of data.bars) {
+    bodies.push(buildBarBody(bar));
+  }
+
+  // ---- パスカーブ(区分2次ベジェの曲がった壁。data.curves由来) ----
+  for (const curve of data.curves) {
+    bodies.push(...buildCurveBodies(curve));
+  }
+
   // ---- 入賞センサー類(常設。開閉が必要なものはロジック側でゲートする。座標はdata由来) ----
   bodies.push(sensorRect(data.heso.x, data.heso.y, data.heso.halfWidth * 2, 10, "heso"));
   bodies.push(sensorRect(data.denchu.x, data.denchu.y, data.denchu.halfWidth * 2, 10, "denchu"));
@@ -529,14 +562,35 @@ export function createWorld(data: BoardData): {
     };
   });
 
-  return { engine, world, windmills };
+  // ---- 回転体(スピナー)。風車と全く同じパターン(アンカーにピン留めしつつ
+  // 一定回転させる)だが、腕は1本だけの単純な矩形ボディ。位置・長さ・太さ・
+  // 回転速度はすべて data.spinners から自由に設定できる(data由来)。 ----
+  const spinners: SpinnerState[] = data.spinners.map((sp) => {
+    const body = Matter.Bodies.rectangle(sp.x, sp.y, sp.length, sp.thickness, {
+      isStatic: false,
+      frictionAir: 0,
+      restitution: 0.7,
+      friction: 0.05,
+      label: "spinner",
+    });
+    Matter.Body.setPosition(body, { x: sp.x, y: sp.y });
+    Matter.Composite.add(world, body);
+    return {
+      body,
+      anchor: { x: sp.x, y: sp.y },
+      spin: sp.spinSpeed,
+    };
+  });
+
+  return { engine, world, windmills, spinners };
 }
 
 function sensorRect(x: number, y: number, w: number, h: number, label: string): Matter.Body {
   return Matter.Bodies.rectangle(x, y, w, h, { isStatic: true, isSensor: true, label });
 }
 
-function buildSegment(a: Vec2, b: Vec2, thickness: number, label: string): Matter.Body {
+/** 反発係数を渡せる(既定0.15=ステージ等の従来挙動と同じ)拡張版 */
+function buildSegment(a: Vec2, b: Vec2, thickness: number, label: string, restitution = 0.15): Matter.Body {
   const mx = (a.x + b.x) / 2;
   const my = (a.y + b.y) / 2;
   const len = Math.hypot(b.x - a.x, b.y - a.y);
@@ -544,14 +598,15 @@ function buildSegment(a: Vec2, b: Vec2, thickness: number, label: string): Matte
   return Matter.Bodies.rectangle(mx, my, len, thickness, {
     isStatic: true,
     angle,
-    restitution: 0.15,
+    restitution,
     friction: 0.02,
     label,
   });
 }
 
-/** 折れ線に沿って薄い矩形を並べ、壁として繋げる(継ぎ目の隙間対策で少し重ねる) */
-function buildWallChain(points: Vec2[], thickness: number, restitution: number): Matter.Body[] {
+/** 折れ線に沿って薄い矩形を並べ、壁として繋げる(継ぎ目の隙間対策で少し重ねる)。
+ * label は既定で従来通り"wall"だが、パスカーブ等の専用ラベルを付けたい場合は指定できる。 */
+function buildWallChain(points: Vec2[], thickness: number, restitution: number, label = "wall"): Matter.Body[] {
   const segs: Matter.Body[] = [];
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
@@ -566,11 +621,55 @@ function buildWallChain(points: Vec2[], thickness: number, restitution: number):
         angle,
         restitution,
         friction: 0.02,
-        label: "wall",
+        label,
       }),
     );
   }
   return segs;
+}
+
+/**
+ * 新障害物(バー・回転体・パスカーブ)共通の既定反発係数。
+ * 「釘と同程度」という要件どおり、釘の反発係数(NAIL_RESTITUTION)と
+ * 同じ値を使う。BoardData側で restitution が省略された場合にこれを使う。
+ */
+const OBSTACLE_DEFAULT_RESTITUTION = NAIL_RESTITUTION;
+
+/** バー(棒状の直線障害物)の静的ボディを1個作る。既存の buildSegment を
+ * "obstacle-bar" ラベル・反発係数指定つきで呼ぶだけの薄いラッパー。
+ * handleCollisionsで特別扱いする必要はなく、ただの静的障害物として
+ * 玉が跳ね返るだけでよいので、既存の"nail"/"wall"/"stage"と衝突しない
+ * 専用ラベルにする以外は特別な処理をしない。 */
+function buildBarBody(bar: BarObstacle): Matter.Body {
+  return buildSegment(
+    { x: bar.x1, y: bar.y1 },
+    { x: bar.x2, y: bar.y2 },
+    bar.thickness,
+    "obstacle-bar",
+    bar.restitution ?? OBSTACLE_DEFAULT_RESTITUTION,
+  );
+}
+
+/** パスカーブ1区間あたりの分割数(曲線の滑らかさ)。細かすぎず粗すぎない値 */
+const CURVE_SAMPLE_COUNT = 12;
+
+/**
+ * パスカーブ(区分2次ベジェ)の静的ボディ列を作る。sampleBezier() で各区間を
+ * 細かくサンプリングし、既存の外壁構築(buildWallChain)と同じ手法で
+ * 連続する小さな回転矩形を繋いだ壁にする。points.length===3 なら単純に
+ * 1区間、5以上ならその都度2点ずつ端点共有でずらしながら複数区間を処理する。
+ */
+function buildCurveBodies(curve: CurveObstacle): Matter.Body[] {
+  const restitution = curve.restitution ?? OBSTACLE_DEFAULT_RESTITUTION;
+  const bodies: Matter.Body[] = [];
+  for (let i = 0; i + 2 < curve.points.length; i += 2) {
+    const p0 = curve.points[i];
+    const p1 = curve.points[i + 1];
+    const p2 = curve.points[i + 2];
+    const sampled = sampleBezier(p0, p1, p2, CURVE_SAMPLE_COUNT);
+    bodies.push(...buildWallChain(sampled, curve.thickness, restitution, "obstacle-curve"));
+  }
+  return bodies;
 }
 
 // =============================================================
@@ -704,6 +803,8 @@ export class PhysicsCore {
   private readonly engine: Matter.Engine;
   private readonly world: Matter.World;
   private readonly windmills: WindmillState[];
+  /** 回転体(スピナー)の状態一覧。windmillsと同じくtickSpinners()で毎ステップ角速度を保たせる */
+  private readonly spinners: SpinnerState[];
   /** 構築に使った BoardData(CCDスイープが参照する釘一覧など) */
   private readonly data: BoardData;
   /** 釘専用の空間分割インデックス(渡された data.nails から1回だけ構築) */
@@ -739,6 +840,7 @@ export class PhysicsCore {
     this.engine = w.engine;
     this.world = w.world;
     this.windmills = w.windmills;
+    this.spinners = w.spinners;
     this.nailGrid = new NailGrid(data.nails, NAIL_GRID_CELL_SIZE);
     Matter.Events.on(this.engine, "collisionStart", (e) => this.handleCollisions(e));
   }
@@ -783,6 +885,7 @@ export class PhysicsCore {
     let steps = 0;
     while (this.accumulator >= STEP_MS && steps < MAX_STEPS_PER_UPDATE) {
       this.tickWindmills();
+      this.tickSpinners();
       this.capturePrePositions(); // CCDスイープ用: Engine.update直前の位置を記録
       Matter.Engine.update(this.engine, STEP_MS);
       this.tickRailBalls(STEP_MS / 1000);
@@ -837,6 +940,7 @@ export class PhysicsCore {
       timeMs: this.simTimeMs,
       balls: this.balls.map((b) => ({ x: b.body.position.x, y: b.body.position.y, angle: b.body.angle })),
       windmillAngles: this.windmills.map((w) => w.body.angle),
+      spinnerAngles: this.spinners.map((s) => s.body.angle),
       denchuOpen: this.denchuOpen,
       attackerOpen: this.attackerOpen,
     };
@@ -851,6 +955,15 @@ export class PhysicsCore {
       Matter.Body.setVelocity(wm.body, { x: 0, y: 0 });
       // setAngularVelocity の引数は 1/60 秒基準のラジアンなので rad/秒 から変換する
       Matter.Body.setAngularVelocity(wm.body, wm.spin / 60);
+    }
+  }
+
+  /** 回転体(スピナー)をアンカー位置に固定しつつ一定角速度を保たせる(風車と全く同じパターン) */
+  private tickSpinners(): void {
+    for (const sp of this.spinners) {
+      Matter.Body.setPosition(sp.body, sp.anchor);
+      Matter.Body.setVelocity(sp.body, { x: 0, y: 0 });
+      Matter.Body.setAngularVelocity(sp.body, sp.spin / 60);
     }
   }
 

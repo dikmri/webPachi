@@ -78,6 +78,7 @@ export class Board implements PachinkoBoard {
       timeMs: snap.timeMs,
       balls: snap.balls,
       windmillAngles: snap.windmillAngles,
+      spinnerAngles: snap.spinnerAngles,
       denchuOpen: snap.denchuOpen,
       attackerOpen: snap.attackerOpen,
       board: this.data,

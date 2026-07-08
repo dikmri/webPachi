@@ -84,6 +84,20 @@ html, body {
   text-transform: uppercase;
 }
 
+/* 「障害物」パネル内の各配置ツール(バー/回転体/カーブ)の見出し */
+.panel h3 {
+  font-size: 11.5px;
+  color: #d9b45a;
+  margin: 10px 0 6px;
+  border-top: 1px solid #262b3a;
+  padding-top: 8px;
+}
+.panel h3:first-of-type {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
 .muted { color: #7a8296; font-size: 12px; }
 
 .btn-row {

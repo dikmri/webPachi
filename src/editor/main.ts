@@ -13,8 +13,11 @@
 // =============================================================
 
 import {
+  type BarObstacle,
   type BoardData,
+  type CurveObstacle,
   type NailDef,
+  type SpinnerObstacle,
   BOARD_DATA_STORAGE_KEY,
   DEFAULT_BOARD_DATA,
   cloneBoardData,
@@ -75,11 +78,15 @@ type ItemRef =
   | { kind: "attacker" }
   | { kind: "pocket"; index: number }
   | { kind: "windmill"; index: number }
-  | { kind: "centerBox" };
+  | { kind: "centerBox" }
+  | { kind: "bar"; index: number; handle: "p1" | "p2" | "mid" }
+  | { kind: "spinner"; index: number }
+  | { kind: "curve"; index: number; pointIndex: number };
 
-/** 釘は追加・削除・移動すべて可能。役物(ヘソ以下)は移動のみ可能(削除不可) */
+/** 釘・バー・回転体・カーブは追加・削除・移動すべて可能。それ以外の役物(ヘソ等)は
+ * 移動のみ可能(削除不可、実機のチューリップ等の固定部品になぞらえた仕様)。 */
 function isDeletable(item: ItemRef): boolean {
-  return item.kind === "nail";
+  return item.kind === "nail" || item.kind === "bar" || item.kind === "spinner" || item.kind === "curve";
 }
 
 function getPos(item: ItemRef): { x: number; y: number } {
@@ -97,6 +104,16 @@ function getPos(item: ItemRef): { x: number; y: number } {
       return data.windmills[item.index];
     case "centerBox":
       return data.centerBox;
+    case "bar": {
+      const bar = data.bars[item.index];
+      if (item.handle === "p1") return { x: bar.x1, y: bar.y1 };
+      if (item.handle === "p2") return { x: bar.x2, y: bar.y2 };
+      return { x: (bar.x1 + bar.x2) / 2, y: (bar.y1 + bar.y2) / 2 };
+    }
+    case "spinner":
+      return data.spinners[item.index];
+    case "curve":
+      return data.curves[item.index].points[item.pointIndex];
   }
 }
 
@@ -120,6 +137,12 @@ function hitRadiusOf(item: ItemRef): number {
       // ここでの円形半径は選択ハイライト描画のフォールバック値としてのみ使う
       // (実際の選択ハイライトは矩形で描画するため通常は参照されない)。
       return Math.max(CENTER_BOX_W, CENTER_BOX_H) / 2;
+    case "bar":
+      return 8;
+    case "spinner":
+      return Math.max(data.spinners[item.index].thickness, 9);
+    case "curve":
+      return 8;
   }
 }
 
@@ -148,6 +171,38 @@ function setItemXY(item: ItemRef, x: number, y: number): void {
       data.centerBox.x = x;
       data.centerBox.y = y;
       break;
+    case "bar": {
+      const bar = data.bars[item.index];
+      if (item.handle === "p1") {
+        bar.x1 = x;
+        bar.y1 = y;
+      } else if (item.handle === "p2") {
+        bar.x2 = x;
+        bar.y2 = y;
+      } else {
+        // 中点(mid)ドラッグ = バー全体の平行移動。中点は p1/p2 から算出される
+        // 値であり単純な絶対座標セットができないため、ドラッグ先座標と現在の
+        // 中点との差分ベクトルを計算し、その差分を p1・p2 の両方に加算する
+        // (こうすることでバーの向き・長さの情報を保ったまま移動できる)。
+        const curMidX = (bar.x1 + bar.x2) / 2;
+        const curMidY = (bar.y1 + bar.y2) / 2;
+        const dx = x - curMidX;
+        const dy = y - curMidY;
+        bar.x1 += dx;
+        bar.y1 += dy;
+        bar.x2 += dx;
+        bar.y2 += dy;
+      }
+      break;
+    }
+    case "spinner":
+      data.spinners[item.index].x = x;
+      data.spinners[item.index].y = y;
+      break;
+    case "curve":
+      data.curves[item.index].points[item.pointIndex].x = x;
+      data.curves[item.index].points[item.pointIndex].y = y;
+      break;
   }
 }
 
@@ -169,6 +224,12 @@ function describeItem(item: ItemRef): string {
       return `風車 #${item.index}`;
     case "centerBox":
       return "センター役物(モニタ)";
+    case "bar":
+      return `バー #${item.index}(${item.handle === "p1" ? "始点" : item.handle === "p2" ? "終点" : "中点"})`;
+    case "spinner":
+      return `回転体 #${item.index}`;
+    case "curve":
+      return `カーブ #${item.index}(制御点${item.pointIndex + 1})`;
   }
 }
 
@@ -182,6 +243,15 @@ function allItems(): ItemRef[] {
   ];
   data.pockets.forEach((_, i) => items.push({ kind: "pocket", index: i }));
   data.windmills.forEach((_, i) => items.push({ kind: "windmill", index: i }));
+  data.spinners.forEach((_, i) => items.push({ kind: "spinner", index: i }));
+  data.bars.forEach((_, i) => {
+    items.push({ kind: "bar", index: i, handle: "p1" });
+    items.push({ kind: "bar", index: i, handle: "p2" });
+    items.push({ kind: "bar", index: i, handle: "mid" });
+  });
+  data.curves.forEach((c, i) => {
+    c.points.forEach((_, pointIndex) => items.push({ kind: "curve", index: i, pointIndex }));
+  });
   data.nails.forEach((_, i) => items.push({ kind: "nail", index: i }));
   return items;
 }
@@ -244,14 +314,114 @@ function makeNail(x: number, y: number): NailDef {
   return r !== undefined ? { x, y, r } : { x, y };
 }
 
-/** 直線配置モードが有効かどうか(ONの間は通常クリック=釘追加が直線配置操作に切り替わる) */
-let lineToolActive = false;
+/**
+ * キャンバス上の「配置ツール」モード。none=通常モード(クリック=釘追加/
+ * ドラッグ=既存アイテム移動)。それ以外は該当ツールがON(排他: 同時に
+ * 2つ以上のツールはONにならない)。直線配置・バー配置・カーブ配置は
+ * 複数回クリックして確定する「待機中の点」を持つ点で共通のパターンを
+ * 踏襲している(回転体配置だけは1クリックで即座に確定する)。
+ */
+type ToolMode = "none" | "line" | "bar" | "spinner" | "curve";
+let toolMode: ToolMode = "none";
+
 /** 直線配置の配置間隔(px)。ツールバーの数値入力と連動する */
 let lineSpacing = 20;
 /** 直線配置の確定済み始点(null=まだ始点待ち、Escでキャンセル可能) */
 let lineStart: { x: number; y: number } | null = null;
 /** 直線配置プレビュー用の現在カーソル座標(始点確定後のみ使う) */
 let linePreviewPos: { x: number; y: number } | null = null;
+
+// ---------------- バー配置ツール ----------------
+
+/** 次に配置するバーの厚み(px)。ツールバーの数値入力と連動する */
+let newBarThickness = 6;
+/** 次に配置するバーの反発係数(undefined=既定値を使う) */
+let newBarRestitution: number | undefined;
+/** バー配置の確定済み始点(null=まだ始点待ち、Escでキャンセル可能) */
+let barStart: { x: number; y: number } | null = null;
+/** バー配置プレビュー用の現在カーソル座標(始点確定後のみ使う) */
+let barPreviewPos: { x: number; y: number } | null = null;
+
+// ---------------- 回転体(スピナー)配置ツール ----------------
+
+/** 次に配置する回転体の長さ・太さ・回転速度。ツールバーの数値入力と連動する */
+let newSpinnerLength = 40;
+let newSpinnerThickness = 8;
+let newSpinnerSpeed = 1.5;
+
+// ---------------- カーブ配置ツール ----------------
+
+/** 次に配置するカーブの厚み(px)。ツールバーの数値入力と連動する */
+let newCurveThickness = 6;
+/** 次に配置するカーブの反発係数(undefined=既定値を使う) */
+let newCurveRestitution: number | undefined;
+/** カーブ配置の確定済み点(始点→制御点→終点の順に最大2個まで溜まる。3個目で確定して即クリア) */
+let curvePoints: { x: number; y: number }[] = [];
+/** カーブ配置プレビュー用の現在カーソル座標(1点目確定後のみ使う) */
+let curvePreviewPos: { x: number; y: number } | null = null;
+
+/**
+ * 始点〜終点の間に1本のバーを配置する。厚み・反発係数は「次に配置するバー」の
+ * 設定に従う(反発係数は未設定=既定値を使う=フィールド省略、という既存の
+ * 釘の半径と同じ慣習)。
+ */
+function placeBar(start: { x: number; y: number }, end: { x: number; y: number }): void {
+  pushUndo();
+  const bar: BarObstacle = {
+    x1: start.x,
+    y1: start.y,
+    x2: end.x,
+    y2: end.y,
+    thickness: newBarThickness,
+    ...(newBarRestitution !== undefined ? { restitution: newBarRestitution } : {}),
+  };
+  data.bars.push(bar);
+  selected = { kind: "bar", index: data.bars.length - 1, handle: "p2" };
+  markDirty();
+  refreshPropertyPanel();
+  logger.log(
+    "editor",
+    `バーを配置: (${start.x.toFixed(1)}, ${start.y.toFixed(1)}) → (${end.x.toFixed(1)}, ${end.y.toFixed(1)}) 厚み${newBarThickness}(合計${data.bars.length}本)`,
+  );
+}
+
+/** クリック地点に回転体を1個即座に配置する。長さ・太さ・回転速度は「次に配置する回転体」の設定に従う */
+function placeSpinner(x: number, y: number): void {
+  pushUndo();
+  const spinner: SpinnerObstacle = {
+    x,
+    y,
+    length: newSpinnerLength,
+    thickness: newSpinnerThickness,
+    spinSpeed: newSpinnerSpeed,
+  };
+  data.spinners.push(spinner);
+  selected = { kind: "spinner", index: data.spinners.length - 1 };
+  markDirty();
+  refreshPropertyPanel();
+  logger.log(
+    "editor",
+    `回転体を配置: (${x.toFixed(1)}, ${y.toFixed(1)}) 長さ${newSpinnerLength} 太さ${newSpinnerThickness} 回転速度${newSpinnerSpeed}(合計${data.spinners.length}個)`,
+  );
+}
+
+/** 始点・制御点・終点の3点で1本のカーブを配置する。厚み・反発係数は「次に配置するカーブ」の設定に従う */
+function placeCurve(p0: { x: number; y: number }, p1: { x: number; y: number }, p2: { x: number; y: number }): void {
+  pushUndo();
+  const curve: CurveObstacle = {
+    points: [{ ...p0 }, { ...p1 }, { ...p2 }],
+    thickness: newCurveThickness,
+    ...(newCurveRestitution !== undefined ? { restitution: newCurveRestitution } : {}),
+  };
+  data.curves.push(curve);
+  selected = { kind: "curve", index: data.curves.length - 1, pointIndex: 2 };
+  markDirty();
+  refreshPropertyPanel();
+  logger.log(
+    "editor",
+    `カーブを配置: 始点(${p0.x.toFixed(1)}, ${p0.y.toFixed(1)}) 制御点(${p1.x.toFixed(1)}, ${p1.y.toFixed(1)}) 終点(${p2.x.toFixed(1)}, ${p2.y.toFixed(1)})(合計${data.curves.length}本)`,
+  );
+}
 
 /**
  * 始点〜終点の間に等間隔で釘を並べて配置する。
@@ -278,16 +448,48 @@ function placeNailLine(start: { x: number; y: number }, end: { x: number; y: num
   );
 }
 
-/** 直線配置モードのON/OFFを切り替える(OFFにする際は確定前の始点も破棄する) */
-function setLineToolActive(active: boolean): void {
-  lineToolActive = active;
+/** ツールモード名を人間向けの表示名にする(ログ・状態表示用) */
+function toolModeLabel(mode: ToolMode): string {
+  switch (mode) {
+    case "line":
+      return "直線配置";
+    case "bar":
+      return "バー配置";
+    case "spinner":
+      return "回転体配置";
+    case "curve":
+      return "カーブ配置";
+    case "none":
+      return "通常";
+  }
+}
+
+/**
+ * 配置ツールモードを切り替える(排他: 常に1個のツールだけがONになる。
+ * mode==="none"で通常モードに戻る)。切り替え時は全ツール共通で確定前の
+ * 待機中の点(始点・制御点等)をすべて破棄する。
+ */
+function setToolMode(mode: ToolMode): void {
+  toolMode = mode;
   lineStart = null;
   linePreviewPos = null;
+  barStart = null;
+  barPreviewPos = null;
+  curvePoints = [];
+  curvePreviewPos = null;
   dragging = null;
   pointerDownPos = null;
-  lineToolBtn.classList.toggle("active", active);
-  lineToolHintEl.style.display = active ? "block" : "none";
-  logger.log("editor", `直線配置モード: ${active ? "ON" : "OFF"}`);
+
+  lineToolBtn.classList.toggle("active", mode === "line");
+  lineToolHintEl.style.display = mode === "line" ? "block" : "none";
+  barToolBtn.classList.toggle("active", mode === "bar");
+  barToolHintEl.style.display = mode === "bar" ? "block" : "none";
+  spinnerToolBtn.classList.toggle("active", mode === "spinner");
+  spinnerToolHintEl.style.display = mode === "spinner" ? "block" : "none";
+  curveToolBtn.classList.toggle("active", mode === "curve");
+  curveToolHintEl.style.display = mode === "curve" ? "block" : "none";
+
+  logger.log("editor", mode === "none" ? "配置ツールを終了し通常モードに戻りました" : `${toolModeLabel(mode)}モード: ON`);
 }
 
 // ---------------- Undo(直前の編集に戻る) ----------------
@@ -375,9 +577,9 @@ canvas.addEventListener("pointerdown", (e) => {
   const p = toCanvasXY(e);
   pointerDownPos = p;
 
-  // 直線配置モード中は通常のクリック=釘追加/ドラッグ=役物移動を無効化し、
-  // すべてのクリックを直線配置の始点/終点確定に使う。
-  if (lineToolActive) {
+  // 配置ツールモード中は通常のクリック=釘追加/ドラッグ=役物移動を無効化し、
+  // すべてのクリックを各ツールの点確定に使う。
+  if (toolMode !== "none") {
     dragging = null;
     return;
   }
@@ -396,11 +598,20 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointermove", (e) => {
   const p = toCanvasXY(e);
 
-  // 直線配置モードで始点確定済みなら、プレビュー線用に現在位置を更新するだけ
-  if (lineToolActive) {
+  // 配置ツールモードで待機中の点があれば、プレビュー用に現在位置を更新するだけ
+  if (toolMode === "line") {
     if (lineStart) linePreviewPos = { x: snap(p.x), y: snap(p.y) };
     return;
   }
+  if (toolMode === "bar") {
+    if (barStart) barPreviewPos = { x: snap(p.x), y: snap(p.y) };
+    return;
+  }
+  if (toolMode === "curve") {
+    if (curvePoints.length > 0) curvePreviewPos = { x: snap(p.x), y: snap(p.y) };
+    return;
+  }
+  if (toolMode === "spinner") return; // 1クリックで即配置するためプレビューは不要
 
   if (!dragging) return;
   dragging.movedEnough = true;
@@ -411,7 +622,7 @@ canvas.addEventListener("pointermove", (e) => {
 canvas.addEventListener("pointerup", (e) => {
   const p = toCanvasXY(e);
 
-  if (lineToolActive) {
+  if (toolMode === "line") {
     // ドラッグなし(pointerdown→pointerupの移動距離が小さい)場合のみ
     // 「1回のクリック」として始点確定/終点確定に使う。
     if (pointerDownPos) {
@@ -428,6 +639,61 @@ canvas.addEventListener("pointerup", (e) => {
           placeNailLine(start, { x: sx, y: sy });
           lineStart = null;
           linePreviewPos = null;
+        }
+      }
+    }
+    pointerDownPos = null;
+    return;
+  }
+
+  if (toolMode === "bar") {
+    if (pointerDownPos) {
+      const dist = Math.hypot(p.x - pointerDownPos.x, p.y - pointerDownPos.y);
+      if (dist < 4) {
+        const sx = snap(p.x);
+        const sy = snap(p.y);
+        if (!barStart) {
+          barStart = { x: sx, y: sy };
+          barPreviewPos = { x: sx, y: sy };
+          logger.log("editor", `バー配置: 始点を (${sx.toFixed(1)}, ${sy.toFixed(1)}) に確定しました`);
+        } else {
+          const start = barStart;
+          placeBar(start, { x: sx, y: sy });
+          barStart = null;
+          barPreviewPos = null;
+        }
+      }
+    }
+    pointerDownPos = null;
+    return;
+  }
+
+  if (toolMode === "spinner") {
+    if (pointerDownPos) {
+      const dist = Math.hypot(p.x - pointerDownPos.x, p.y - pointerDownPos.y);
+      if (dist < 4) placeSpinner(snap(p.x), snap(p.y));
+    }
+    pointerDownPos = null;
+    return;
+  }
+
+  if (toolMode === "curve") {
+    if (pointerDownPos) {
+      const dist = Math.hypot(p.x - pointerDownPos.x, p.y - pointerDownPos.y);
+      if (dist < 4) {
+        const sx = snap(p.x);
+        const sy = snap(p.y);
+        curvePoints.push({ x: sx, y: sy });
+        curvePreviewPos = { x: sx, y: sy };
+        if (curvePoints.length === 1) {
+          logger.log("editor", `カーブ配置: 始点を (${sx.toFixed(1)}, ${sy.toFixed(1)}) に確定しました`);
+        } else if (curvePoints.length === 2) {
+          logger.log("editor", `カーブ配置: 制御点を (${sx.toFixed(1)}, ${sy.toFixed(1)}) に確定しました`);
+        } else {
+          const [p0, p1, p2] = curvePoints;
+          placeCurve(p0, p1, p2);
+          curvePoints = [];
+          curvePreviewPos = null;
         }
       }
     }
@@ -468,11 +734,17 @@ window.addEventListener("keydown", (e) => {
   const target = e.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
 
-  if (e.key === "Escape" && lineToolActive && lineStart) {
+  if (e.key === "Escape" && toolMode !== "none") {
     e.preventDefault();
+    // どのツールが待機中の点を持っていても、まとめて破棄するだけでよい
+    // (他ツールの変数は元々未使用のnull/空配列のままなので副作用はない)。
     lineStart = null;
     linePreviewPos = null;
-    logger.log("editor", "直線配置: 確定前の始点をキャンセルしました");
+    barStart = null;
+    barPreviewPos = null;
+    curvePoints = [];
+    curvePreviewPos = null;
+    logger.log("editor", `${toolModeLabel(toolMode)}: 確定前の点をキャンセルしました`);
     return;
   }
   if ((e.key === "Delete" || e.key === "Backspace") && selected && isDeletable(selected)) {
@@ -487,10 +759,21 @@ window.addEventListener("keydown", (e) => {
 });
 
 function deleteSelected(): void {
-  if (!selected || selected.kind !== "nail") return;
+  if (!selected || !isDeletable(selected)) return;
   pushUndo();
-  data.nails.splice(selected.index, 1);
-  logger.log("editor", `釘を削除しました(残り${data.nails.length}本)`);
+  if (selected.kind === "nail") {
+    data.nails.splice(selected.index, 1);
+    logger.log("editor", `釘を削除しました(残り${data.nails.length}本)`);
+  } else if (selected.kind === "bar") {
+    data.bars.splice(selected.index, 1);
+    logger.log("editor", `バーを削除しました(残り${data.bars.length}本)`);
+  } else if (selected.kind === "spinner") {
+    data.spinners.splice(selected.index, 1);
+    logger.log("editor", `回転体を削除しました(残り${data.spinners.length}個)`);
+  } else if (selected.kind === "curve") {
+    data.curves.splice(selected.index, 1);
+    logger.log("editor", `カーブを削除しました(残り${data.curves.length}本)`);
+  }
   selected = null;
   markDirty();
   refreshPropertyPanel();
@@ -501,12 +784,27 @@ function deleteSelected(): void {
 const propNoneEl = document.getElementById("prop-none")!;
 const propFormEl = document.getElementById("prop-form")!;
 const propKindEl = document.getElementById("prop-kind")!;
+const propXRowEl = document.getElementById("prop-x-row")!;
+const propYRowEl = document.getElementById("prop-y-row")!;
 const propXEl = document.getElementById("prop-x") as HTMLInputElement;
 const propYEl = document.getElementById("prop-y") as HTMLInputElement;
 const propRRowEl = document.getElementById("prop-r-row")!;
 const propREl = document.getElementById("prop-r") as HTMLInputElement;
 const propHwRowEl = document.getElementById("prop-hw-row")!;
 const propHwEl = document.getElementById("prop-hw") as HTMLInputElement;
+const propBarFormEl = document.getElementById("prop-bar-form")!;
+const propBarX1El = document.getElementById("prop-bar-x1") as HTMLInputElement;
+const propBarY1El = document.getElementById("prop-bar-y1") as HTMLInputElement;
+const propBarX2El = document.getElementById("prop-bar-x2") as HTMLInputElement;
+const propBarY2El = document.getElementById("prop-bar-y2") as HTMLInputElement;
+const propBarThicknessEl = document.getElementById("prop-bar-thickness") as HTMLInputElement;
+const propBarRestitutionEl = document.getElementById("prop-bar-restitution") as HTMLInputElement;
+const propSpinnerFormEl = document.getElementById("prop-spinner-form")!;
+const propSpinnerLengthEl = document.getElementById("prop-spinner-length") as HTMLInputElement;
+const propSpinnerThicknessEl = document.getElementById("prop-spinner-thickness") as HTMLInputElement;
+const propSpinnerSpeedEl = document.getElementById("prop-spinner-speed") as HTMLInputElement;
+const propCurveFormEl = document.getElementById("prop-curve-form")!;
+const propCurveThicknessEl = document.getElementById("prop-curve-thickness") as HTMLInputElement;
 const propDeleteBtn = document.getElementById("prop-delete") as HTMLButtonElement;
 
 function refreshPropertyPanel(): void {
@@ -517,23 +815,69 @@ function refreshPropertyPanel(): void {
   }
   propNoneEl.style.display = "none";
   propFormEl.style.display = "block";
-
-  const p = getPos(selected);
   propKindEl.textContent = describeItem(selected);
-  propXEl.value = p.x.toFixed(2);
-  propYEl.value = p.y.toFixed(2);
 
+  // 種類ごとに必要な項目だけを出す。既定はすべて非表示にしてから該当分を表示する。
+  propXRowEl.style.display = "none";
+  propYRowEl.style.display = "none";
   propRRowEl.style.display = "none";
   propHwRowEl.style.display = "none";
+  propBarFormEl.style.display = "none";
+  propSpinnerFormEl.style.display = "none";
+  propCurveFormEl.style.display = "none";
   propDeleteBtn.disabled = !isDeletable(selected);
 
   if (selected.kind === "nail") {
+    const p = getPos(selected);
+    propXRowEl.style.display = "flex";
+    propYRowEl.style.display = "flex";
+    propXEl.value = p.x.toFixed(2);
+    propYEl.value = p.y.toFixed(2);
     propRRowEl.style.display = "flex";
     const n: NailDef = data.nails[selected.index];
     propREl.value = n.r !== undefined ? String(n.r) : "";
   } else if (selected.kind === "heso" || selected.kind === "denchu" || selected.kind === "gate" || selected.kind === "attacker") {
+    const p = getPos(selected);
+    propXRowEl.style.display = "flex";
+    propYRowEl.style.display = "flex";
+    propXEl.value = p.x.toFixed(2);
+    propYEl.value = p.y.toFixed(2);
     propHwRowEl.style.display = "flex";
     propHwEl.value = String(data[selected.kind].halfWidth);
+  } else if (selected.kind === "pocket" || selected.kind === "windmill" || selected.kind === "centerBox") {
+    const p = getPos(selected);
+    propXRowEl.style.display = "flex";
+    propYRowEl.style.display = "flex";
+    propXEl.value = p.x.toFixed(2);
+    propYEl.value = p.y.toFixed(2);
+  } else if (selected.kind === "bar") {
+    const bar = data.bars[selected.index];
+    propBarFormEl.style.display = "block";
+    propBarX1El.value = bar.x1.toFixed(2);
+    propBarY1El.value = bar.y1.toFixed(2);
+    propBarX2El.value = bar.x2.toFixed(2);
+    propBarY2El.value = bar.y2.toFixed(2);
+    propBarThicknessEl.value = String(bar.thickness);
+    propBarRestitutionEl.value = bar.restitution !== undefined ? String(bar.restitution) : "";
+  } else if (selected.kind === "spinner") {
+    const sp = data.spinners[selected.index];
+    propXRowEl.style.display = "flex";
+    propYRowEl.style.display = "flex";
+    propXEl.value = sp.x.toFixed(2);
+    propYEl.value = sp.y.toFixed(2);
+    propSpinnerFormEl.style.display = "block";
+    propSpinnerLengthEl.value = String(sp.length);
+    propSpinnerThicknessEl.value = String(sp.thickness);
+    propSpinnerSpeedEl.value = String(sp.spinSpeed);
+  } else if (selected.kind === "curve") {
+    const curve = data.curves[selected.index];
+    const pt = curve.points[selected.pointIndex];
+    propXRowEl.style.display = "flex";
+    propYRowEl.style.display = "flex";
+    propXEl.value = pt.x.toFixed(2);
+    propYEl.value = pt.y.toFixed(2);
+    propCurveFormEl.style.display = "block";
+    propCurveThicknessEl.value = String(curve.thickness);
   }
 }
 
@@ -561,15 +905,73 @@ function bindNumberField(el: HTMLInputElement, apply: (v: number) => void): void
 }
 
 bindNumberField(propXEl, (v) => {
-  if (selected) setItemXY(selected, v, getPos(selected).y);
+  // バーはx1/y1/x2/y2の専用欄を使うため、この共通x欄の対象から除外する
+  // (バー選択時はこの欄自体が非表示になっているが念のため二重にガードする)。
+  if (selected && selected.kind !== "bar") setItemXY(selected, v, getPos(selected).y);
 });
 bindNumberField(propYEl, (v) => {
-  if (selected) setItemXY(selected, getPos(selected).x, v);
+  if (selected && selected.kind !== "bar") setItemXY(selected, getPos(selected).x, v);
 });
 bindNumberField(propHwEl, (v) => {
   if (selected && (selected.kind === "heso" || selected.kind === "denchu" || selected.kind === "gate" || selected.kind === "attacker")) {
     data[selected.kind].halfWidth = v;
   }
+});
+
+// ---- バー専用フィールド ----
+bindNumberField(propBarX1El, (v) => {
+  if (selected?.kind === "bar") data.bars[selected.index].x1 = v;
+});
+bindNumberField(propBarY1El, (v) => {
+  if (selected?.kind === "bar") data.bars[selected.index].y1 = v;
+});
+bindNumberField(propBarX2El, (v) => {
+  if (selected?.kind === "bar") data.bars[selected.index].x2 = v;
+});
+bindNumberField(propBarY2El, (v) => {
+  if (selected?.kind === "bar") data.bars[selected.index].y2 = v;
+});
+bindNumberField(propBarThicknessEl, (v) => {
+  if (selected?.kind === "bar" && v > 0) data.bars[selected.index].thickness = v;
+});
+// 反発係数は空欄=既定値という特別な意味を持つため、釘の半径と同様に専用ハンドラにする
+{
+  let armed = true;
+  propBarRestitutionEl.addEventListener("input", () => {
+    if (!selected || selected.kind !== "bar") return;
+    if (armed) {
+      pushUndo();
+      armed = false;
+    }
+    const raw = propBarRestitutionEl.value.trim();
+    const bar = data.bars[selected.index];
+    if (raw === "") {
+      bar.restitution = undefined;
+    } else {
+      const v = Number(raw);
+      if (Number.isFinite(v)) bar.restitution = v;
+    }
+  });
+  propBarRestitutionEl.addEventListener("change", () => {
+    armed = true;
+    markDirty();
+  });
+}
+
+// ---- 回転体専用フィールド(x/yは上の共通欄を使う) ----
+bindNumberField(propSpinnerLengthEl, (v) => {
+  if (selected?.kind === "spinner" && v > 0) data.spinners[selected.index].length = v;
+});
+bindNumberField(propSpinnerThicknessEl, (v) => {
+  if (selected?.kind === "spinner" && v > 0) data.spinners[selected.index].thickness = v;
+});
+bindNumberField(propSpinnerSpeedEl, (v) => {
+  if (selected?.kind === "spinner") data.spinners[selected.index].spinSpeed = v;
+});
+
+// ---- カーブ専用フィールド(選択中の制御点のx/yは上の共通欄を使う。厚みはカーブ全体の値) ----
+bindNumberField(propCurveThicknessEl, (v) => {
+  if (selected?.kind === "curve" && v > 0) data.curves[selected.index].thickness = v;
 });
 
 // 半径フィールドは空欄=既定半径(NAIL_RADIUS)という特別な意味を持つため専用ハンドラにする
@@ -636,7 +1038,78 @@ lineSpacingEl.addEventListener("input", () => {
 
 const lineToolBtn = document.getElementById("btn-line-tool") as HTMLButtonElement;
 const lineToolHintEl = document.getElementById("line-tool-hint")!;
-lineToolBtn.addEventListener("click", () => setLineToolActive(!lineToolActive));
+lineToolBtn.addEventListener("click", () => setToolMode(toolMode === "line" ? "none" : "line"));
+
+// ---------------- バー・回転体・カーブ配置ツールのDOM連携 ----------------
+
+const newBarThicknessEl = document.getElementById("new-bar-thickness") as HTMLInputElement;
+newBarThicknessEl.value = String(newBarThickness);
+newBarThicknessEl.addEventListener("input", () => {
+  const v = Number(newBarThicknessEl.value);
+  if (Number.isFinite(v) && v > 0) newBarThickness = v;
+});
+
+const newBarRestitutionEl = document.getElementById("new-bar-restitution") as HTMLInputElement;
+newBarRestitutionEl.addEventListener("input", () => {
+  const raw = newBarRestitutionEl.value.trim();
+  if (raw === "") {
+    newBarRestitution = undefined;
+    return;
+  }
+  const v = Number(raw);
+  if (Number.isFinite(v)) newBarRestitution = v;
+});
+
+const barToolBtn = document.getElementById("btn-bar-tool") as HTMLButtonElement;
+const barToolHintEl = document.getElementById("bar-tool-hint")!;
+barToolBtn.addEventListener("click", () => setToolMode(toolMode === "bar" ? "none" : "bar"));
+
+const newSpinnerLengthEl = document.getElementById("new-spinner-length") as HTMLInputElement;
+newSpinnerLengthEl.value = String(newSpinnerLength);
+newSpinnerLengthEl.addEventListener("input", () => {
+  const v = Number(newSpinnerLengthEl.value);
+  if (Number.isFinite(v) && v > 0) newSpinnerLength = v;
+});
+
+const newSpinnerThicknessEl = document.getElementById("new-spinner-thickness") as HTMLInputElement;
+newSpinnerThicknessEl.value = String(newSpinnerThickness);
+newSpinnerThicknessEl.addEventListener("input", () => {
+  const v = Number(newSpinnerThicknessEl.value);
+  if (Number.isFinite(v) && v > 0) newSpinnerThickness = v;
+});
+
+const newSpinnerSpeedEl = document.getElementById("new-spinner-speed") as HTMLInputElement;
+newSpinnerSpeedEl.value = String(newSpinnerSpeed);
+newSpinnerSpeedEl.addEventListener("input", () => {
+  const v = Number(newSpinnerSpeedEl.value);
+  if (Number.isFinite(v)) newSpinnerSpeed = v;
+});
+
+const spinnerToolBtn = document.getElementById("btn-spinner-tool") as HTMLButtonElement;
+const spinnerToolHintEl = document.getElementById("spinner-tool-hint")!;
+spinnerToolBtn.addEventListener("click", () => setToolMode(toolMode === "spinner" ? "none" : "spinner"));
+
+const newCurveThicknessEl = document.getElementById("new-curve-thickness") as HTMLInputElement;
+newCurveThicknessEl.value = String(newCurveThickness);
+newCurveThicknessEl.addEventListener("input", () => {
+  const v = Number(newCurveThicknessEl.value);
+  if (Number.isFinite(v) && v > 0) newCurveThickness = v;
+});
+
+const newCurveRestitutionEl = document.getElementById("new-curve-restitution") as HTMLInputElement;
+newCurveRestitutionEl.addEventListener("input", () => {
+  const raw = newCurveRestitutionEl.value.trim();
+  if (raw === "") {
+    newCurveRestitution = undefined;
+    return;
+  }
+  const v = Number(raw);
+  if (Number.isFinite(v)) newCurveRestitution = v;
+});
+
+const curveToolBtn = document.getElementById("btn-curve-tool") as HTMLButtonElement;
+const curveToolHintEl = document.getElementById("curve-tool-hint")!;
+curveToolBtn.addEventListener("click", () => setToolMode(toolMode === "curve" ? "none" : "curve"));
 
 // ---------------- ファイル操作(エクスポート・読み込み・リセット) ----------------
 
@@ -871,7 +1344,7 @@ function drawEditorOverlay(overlayCtx: CanvasRenderingContext2D, snap: PhysicsSn
     overlayCtx.setLineDash([]);
   }
 
-  if (lineToolActive && lineStart) {
+  if (toolMode === "line" && lineStart) {
     // 直線配置プレビュー: 始点〜現在のカーソル位置を結ぶ線と、確定時に
     // 実際に配置される釘の位置(等間隔)を先読みして表示する。
     const end = linePreviewPos ?? lineStart;
@@ -897,6 +1370,44 @@ function drawEditorOverlay(overlayCtx: CanvasRenderingContext2D, snap: PhysicsSn
     }
   }
 
+  if (toolMode === "bar" && barStart) {
+    // バー配置プレビュー: 始点〜現在のカーソル位置を結ぶ線を、設定中の厚みで先読み表示する
+    const end = barPreviewPos ?? barStart;
+    overlayCtx.strokeStyle = "rgba(120,220,255,0.85)";
+    overlayCtx.lineWidth = Math.max(newBarThickness, 2);
+    overlayCtx.setLineDash([6, 4]);
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(barStart.x, barStart.y);
+    overlayCtx.lineTo(end.x, end.y);
+    overlayCtx.stroke();
+    overlayCtx.setLineDash([]);
+  }
+
+  if (toolMode === "curve" && curvePoints.length > 0) {
+    // カーブ配置プレビュー: 確定済みの点 + 現在のカーソル位置までを結んで先読み表示する。
+    // 1点確定済み(始点のみ)なら直線、2点確定済み(始点+制御点)なら2次ベジェで表示する。
+    const previewPts = [...curvePoints, curvePreviewPos ?? curvePoints[curvePoints.length - 1]];
+    overlayCtx.strokeStyle = "rgba(120,220,255,0.85)";
+    overlayCtx.lineWidth = Math.max(newCurveThickness, 2);
+    overlayCtx.setLineDash([6, 4]);
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(previewPts[0].x, previewPts[0].y);
+    if (previewPts.length === 2) {
+      overlayCtx.lineTo(previewPts[1].x, previewPts[1].y);
+    } else {
+      overlayCtx.quadraticCurveTo(previewPts[1].x, previewPts[1].y, previewPts[2].x, previewPts[2].y);
+    }
+    overlayCtx.stroke();
+    overlayCtx.setLineDash([]);
+
+    overlayCtx.fillStyle = "rgba(120,220,255,0.9)";
+    for (const pt of curvePoints) {
+      overlayCtx.beginPath();
+      overlayCtx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      overlayCtx.fill();
+    }
+  }
+
   if (selected) {
     overlayCtx.strokeStyle = "#3ddc84";
     overlayCtx.lineWidth = 2;
@@ -904,6 +1415,37 @@ function drawEditorOverlay(overlayCtx: CanvasRenderingContext2D, snap: PhysicsSn
       // センター役物は大きな矩形なので、円ではなく矩形そのものをハイライトする
       const rect = centerBoxRectFor(data);
       overlayCtx.strokeRect(rect.x0 - 4, rect.y0 - 4, rect.x1 - rect.x0 + 8, rect.y1 - rect.y0 + 8);
+    } else if (selected.kind === "bar") {
+      // バーは線そのもの+両端点・中点のハンドルをハイライトする
+      const bar = data.bars[selected.index];
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(bar.x1, bar.y1);
+      overlayCtx.lineTo(bar.x2, bar.y2);
+      overlayCtx.stroke();
+      const handles = [
+        { x: bar.x1, y: bar.y1 },
+        { x: bar.x2, y: bar.y2 },
+        { x: (bar.x1 + bar.x2) / 2, y: (bar.y1 + bar.y2) / 2 },
+      ];
+      for (const h of handles) {
+        overlayCtx.beginPath();
+        overlayCtx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+        overlayCtx.stroke();
+      }
+    } else if (selected.kind === "curve") {
+      // カーブは曲線そのもの+各制御点のハイライトを表示する
+      const curve = data.curves[selected.index];
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(curve.points[0].x, curve.points[0].y);
+      for (let i = 0; i + 2 < curve.points.length; i += 2) {
+        overlayCtx.quadraticCurveTo(curve.points[i + 1].x, curve.points[i + 1].y, curve.points[i + 2].x, curve.points[i + 2].y);
+      }
+      overlayCtx.stroke();
+      for (const pt of curve.points) {
+        overlayCtx.beginPath();
+        overlayCtx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
+        overlayCtx.stroke();
+      }
     } else {
       const p = getPos(selected);
       overlayCtx.beginPath();
@@ -936,6 +1478,7 @@ function frameLoop(ts: number): void {
     timeMs: snap.timeMs,
     balls: snap.balls,
     windmillAngles: snap.windmillAngles,
+    spinnerAngles: snap.spinnerAngles,
     denchuOpen: false,
     attackerOpen: false,
     board: data,

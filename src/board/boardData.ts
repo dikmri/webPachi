@@ -25,6 +25,54 @@ export interface PointFeature {
 }
 
 /**
+ * バー(棒状の直線障害物)。x1,y1〜x2,y2 の間に厚み thickness の静的な壁を作る。
+ * 釘や役物と違って自由な角度・長さで置ける単純な直線障害物として、盤面の
+ * 玉の流れを人力でコントロールする用途を想定している。
+ */
+export interface BarObstacle {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  thickness: number;
+  /** 反発係数。省略時は既定値(釘と同程度。実際の値は layout.ts の定数を参照)を使う */
+  restitution?: number;
+}
+
+/**
+ * 回転体(単純な1本の回転バー)。中心(x,y)を軸に一定角速度で回転する
+ * 静的アニメーションボディ。既存の風車(BoardData.windmills、十字型・固定形状)
+ * とは別物で、よりシンプルな単腕の回転バーとして、位置・長さ・太さ・回転速度を
+ * すべて自由に設定できるようにしたもの。
+ */
+export interface SpinnerObstacle {
+  /** 回転軸(中心)のx座標 */
+  x: number;
+  /** 回転軸(中心)のy座標 */
+  y: number;
+  length: number;
+  thickness: number;
+  /** ラジアン/秒。符号で回転方向(正負)を表す */
+  spinSpeed: number;
+}
+
+/**
+ * パスカーブ(2次ベジェ曲線による曲がった壁)。points は3点以上(奇数個)で、
+ * 連続する3点ずつ(始点・制御点・終点)が1区間の2次ベジェを構成し、区間同士は
+ * 端点を共有して繋がる(標準的な区分2次ベジェスプライン)。
+ * エディタのカーブ配置ツールは「3点(始点・制御点・終点)を順にクリックして
+ * 1個のカーブを確定する」形なので、通常は points.length===3 のオブジェクトが
+ * 1個作られる。points が可変長である設計自体は将来の拡張(5点以上の連続
+ * スプライン)のためのものであり、現時点でも layout.ts 側は
+ * (2点ずつ端点共有でずらす)一般形として処理する。
+ */
+export interface CurveObstacle {
+  points: { x: number; y: number }[];
+  thickness: number;
+  restitution?: number;
+}
+
+/**
  * 盤面の「取付部品」座標データ一式。盤面エディタで編集し、
  * localStorage / JSONファイルに保存・読み込みされる唯一の可変データ。
  */
@@ -50,6 +98,12 @@ export interface BoardData {
    * 旧形式(このフィールドが無いJSON)は normalizeBoardData() で補完すること。
    */
   centerBox: { x: number; y: number };
+  /** バー(棒状の直線障害物)。旧形式(このフィールドが無いJSON)は normalizeBoardData() で補完すること。 */
+  bars: BarObstacle[];
+  /** 回転体(単腕の回転バー)。旧形式(このフィールドが無いJSON)は normalizeBoardData() で補完すること。 */
+  spinners: SpinnerObstacle[];
+  /** パスカーブ(区分2次ベジェの曲がった壁)。旧形式(このフィールドが無いJSON)は normalizeBoardData() で補完すること。 */
+  curves: CurveObstacle[];
 }
 
 /** 盤面エディタが localStorage に保存する際のキー名(main.ts 側もこの名前を参照する) */
@@ -129,6 +183,12 @@ export const DEFAULT_BOARD_DATA: BoardData = {
   // 中心座標と完全に一致する値。この値を変えない限りリファクタ前後で
   // 物理・描画とも一切挙動が変わらない。
   centerBox: { x: 240, y: 240 },
+  // 新障害物(バー・回転体・パスカーブ)はデフォルト盤面には一切配置しない。
+  // 空配列のままにすることで、既存の物理・描画挙動(回転率シミュレーション
+  // 結果を含む)は従来と完全に同一のまま維持される。
+  bars: [],
+  spinners: [],
+  curves: [],
 };
 
 /** BoardData の深いコピーを返す(エディタの編集・Undo・保存前後で参照を共有しないため) */
@@ -142,6 +202,13 @@ export function cloneBoardData(d: BoardData): BoardData {
     pockets: d.pockets.map((p) => ({ ...p })),
     windmills: d.windmills.map((p) => ({ ...p })),
     centerBox: { ...d.centerBox },
+    bars: d.bars.map((b) => ({ ...b })),
+    spinners: d.spinners.map((s) => ({ ...s })),
+    curves: d.curves.map((c) => ({
+      points: c.points.map((p) => ({ ...p })),
+      thickness: c.thickness,
+      ...(c.restitution !== undefined ? { restitution: c.restitution } : {}),
+    })),
   };
 }
 
@@ -171,19 +238,48 @@ function isPointFeature(v: unknown): v is PointFeature {
   return isFiniteNumber(o.halfWidth);
 }
 
+/** BarObstacle({x1,y1,x2,y2,thickness,restitution?}) 形状のチェック */
+function isBarObstacle(v: unknown): v is BarObstacle {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (!isFiniteNumber(o.x1) || !isFiniteNumber(o.y1) || !isFiniteNumber(o.x2) || !isFiniteNumber(o.y2)) return false;
+  if (!isFiniteNumber(o.thickness)) return false;
+  return o.restitution === undefined || isFiniteNumber(o.restitution);
+}
+
+/** SpinnerObstacle({x,y,length,thickness,spinSpeed}) 形状のチェック */
+function isSpinnerObstacle(v: unknown): v is SpinnerObstacle {
+  if (!isXY(v)) return false;
+  const o = v as Record<string, unknown>;
+  return isFiniteNumber(o.length) && isFiniteNumber(o.thickness) && isFiniteNumber(o.spinSpeed);
+}
+
+/**
+ * CurveObstacle({points,thickness,restitution?}) 形状のチェック。
+ * points は3点以上・奇数個(始点+(制御点・終点)の繰り返し)であることを検証する。
+ */
+function isCurveObstacle(v: unknown): v is CurveObstacle {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (!Array.isArray(o.points) || o.points.length < 3 || o.points.length % 2 === 0) return false;
+  if (!o.points.every(isXY)) return false;
+  if (!isFiniteNumber(o.thickness)) return false;
+  return o.restitution === undefined || isFiniteNumber(o.restitution);
+}
+
 /**
  * 実行時の形状バリデーション。localStorage / JSONファイルなど、
  * 型情報を持たない外部由来の値(unknown)を安全に BoardData として
  * 扱えるかどうかをここで必ずチェックする。
  *
- * 注意: centerBox は「必須」にしていない。旧形式(centerBox追加前)に
- * 保存済みの localStorage / JSON データには centerBox フィールドが
- * 存在しないため、ここで必須にしてしまうと旧データが軒並み不正判定と
- * なり、ユーザーが前回のエディタで積み上げた編集内容ごと消えてしまう
- * (デフォルト盤面に差し戻ってしまう)。centerBox が無くても他の必須
- * フィールドさえ揃っていれば true を返し、実際の補完は
- * normalizeBoardData() 側の責務とする。ただし centerBox キー自体は
- * 存在するのに形が壊れている(x/yが数値でない等)場合は不正として弾く。
+ * 注意: centerBox / bars / spinners / curves は「必須」にしていない。
+ * これらを追加する前に保存済みの localStorage / JSON データには
+ * これらのフィールドが存在しないため、ここで必須にしてしまうと旧データが
+ * 軒並み不正判定となり、ユーザーが前回のエディタで積み上げた編集内容ごと
+ * 消えてしまう(デフォルト盤面に差し戻ってしまう)。これらが無くても他の
+ * 必須フィールドさえ揃っていれば true を返し、実際の補完は
+ * normalizeBoardData() 側の責務とする。ただしキー自体は存在するのに
+ * 形が壊れている(x/yが数値でない等)場合は不正として弾く。
  */
 export function isValidBoardData(v: unknown): v is BoardData {
   if (typeof v !== "object" || v === null) return false;
@@ -197,19 +293,32 @@ export function isValidBoardData(v: unknown): v is BoardData {
   if (!Array.isArray(o.pockets) || !o.pockets.every(isXY)) return false;
   if (!Array.isArray(o.windmills) || !o.windmills.every(isXY)) return false;
   if (o.centerBox !== undefined && !isXY(o.centerBox)) return false;
+  if (o.bars !== undefined && (!Array.isArray(o.bars) || !o.bars.every(isBarObstacle))) return false;
+  if (o.spinners !== undefined && (!Array.isArray(o.spinners) || !o.spinners.every(isSpinnerObstacle))) return false;
+  if (o.curves !== undefined && (!Array.isArray(o.curves) || !o.curves.every(isCurveObstacle))) return false;
 
   return true;
 }
 
 /**
- * isValidBoardData() を通過した値を、常に centerBox を持つ完全な BoardData に
- * 正規化する。旧形式(centerBoxフィールドが無い)データを読み込んだ場合は
- * DEFAULT_BOARD_DATA.centerBox のコピーを補って返す(=センター役物は
- * 従来通りの中央位置になるだけで、ユーザーの釘・役物編集内容は一切失われない)。
- * localStorage / JSONファイルなど外部由来のデータを読み込んだ直後は、
- * isValidBoardData() での検証に続けて必ずこの関数を通すこと。
+ * isValidBoardData() を通過した値を、常に centerBox / bars / spinners / curves を
+ * 持つ完全な BoardData に正規化する。旧形式(これらのフィールドが無い)データを
+ * 読み込んだ場合は、centerBox は DEFAULT_BOARD_DATA.centerBox のコピーを、
+ * bars / spinners / curves は空配列を補って返す(=ユーザーの釘・役物編集内容は
+ * 一切失われない)。localStorage / JSONファイルなど外部由来のデータを
+ * 読み込んだ直後は、isValidBoardData() での検証に続けて必ずこの関数を通すこと。
  */
 export function normalizeBoardData(v: BoardData): BoardData {
-  if (isXY(v.centerBox)) return v;
-  return { ...v, centerBox: { ...DEFAULT_BOARD_DATA.centerBox } };
+  const centerBoxOk = isXY(v.centerBox);
+  const barsOk = Array.isArray(v.bars);
+  const spinnersOk = Array.isArray(v.spinners);
+  const curvesOk = Array.isArray(v.curves);
+  if (centerBoxOk && barsOk && spinnersOk && curvesOk) return v;
+  return {
+    ...v,
+    centerBox: centerBoxOk ? v.centerBox : { ...DEFAULT_BOARD_DATA.centerBox },
+    bars: barsOk ? v.bars : [],
+    spinners: spinnersOk ? v.spinners : [],
+    curves: curvesOk ? v.curves : [],
+  };
 }

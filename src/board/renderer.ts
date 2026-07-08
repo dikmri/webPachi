@@ -9,7 +9,7 @@
 
 import { BALL_RADIUS, BOARD_H, BOARD_W, NAIL_RADIUS } from "../types";
 import * as L from "./layout";
-import type { BoardData } from "./boardData";
+import type { BarObstacle, BoardData, CurveObstacle, SpinnerObstacle } from "./boardData";
 
 /** board.ts から渡される、1フレーム分の描画用スナップショット */
 export interface RenderState {
@@ -18,6 +18,8 @@ export interface RenderState {
   balls: { x: number; y: number; angle: number }[];
   /** 風車それぞれの現在角度(ラジアン) */
   windmillAngles: number[];
+  /** 回転体(スピナー)それぞれの現在角度(ラジアン) */
+  spinnerAngles: number[];
   denchuOpen: boolean;
   attackerOpen: boolean;
   /** 釘・役物の座標データ(盤面エディタで編集可能な「取付部品」)。外枠・
@@ -40,7 +42,10 @@ export function drawBoard(ctx: CanvasRenderingContext2D, s: RenderState): void {
   drawRoadNailHint(ctx);
   drawSensors(ctx, s);
   drawNails(ctx, s.board);
+  drawBars(ctx, s.board);
+  drawCurves(ctx, s.board);
   drawWindmills(ctx, s.board, s.windmillAngles);
+  drawSpinners(ctx, s.board, s.spinnerAngles);
   drawBalls(ctx, s.balls);
 
   ctx.restore();
@@ -358,6 +363,129 @@ function drawWindmill(ctx: CanvasRenderingContext2D, x: number, y: number, angle
   ctx.beginPath();
   ctx.arc(0, 0, thick * 0.7, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.restore();
+}
+
+// ---------------- バー(棒状の直線障害物) ----------------
+
+function drawBars(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  for (const bar of board.bars) drawBar(ctx, bar);
+}
+
+function drawBar(ctx: CanvasRenderingContext2D, bar: BarObstacle): void {
+  const mx = (bar.x1 + bar.x2) / 2;
+  const my = (bar.y1 + bar.y2) / 2;
+  const len = Math.hypot(bar.x2 - bar.x1, bar.y2 - bar.y1);
+  const angle = Math.atan2(bar.y2 - bar.y1, bar.x2 - bar.x1);
+  const th = bar.thickness;
+
+  ctx.save();
+  ctx.translate(mx, my);
+  ctx.rotate(angle);
+
+  // 影
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  roundRect(ctx, -len / 2 + 0.8, -th / 2 + 1, len, th, th / 3);
+  ctx.fill();
+
+  // 金属光沢の本体(釘・風車と同系統のゴールド系グラデーション)
+  const grad = ctx.createLinearGradient(0, -th / 2, 0, th / 2);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(0.3, "#e6d9a8");
+  grad.addColorStop(0.7, "#a98a4a");
+  grad.addColorStop(1, "#5c4a24");
+  ctx.fillStyle = grad;
+  roundRect(ctx, -len / 2, -th / 2, len, th, th / 3);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = 0.8;
+  roundRect(ctx, -len / 2, -th / 2, len, th, th / 3);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ---------------- 回転体(スピナー) ----------------
+
+function drawSpinners(ctx: CanvasRenderingContext2D, board: BoardData, angles: number[]): void {
+  board.spinners.forEach((sp, i) => {
+    drawSpinner(ctx, sp, angles[i] ?? 0);
+  });
+}
+
+function drawSpinner(ctx: CanvasRenderingContext2D, sp: SpinnerObstacle, angle: number): void {
+  ctx.save();
+  ctx.translate(sp.x, sp.y);
+  ctx.rotate(angle);
+
+  // 単腕(既存の風車の羽根と同系統の海テーマ配色にする)
+  const bladeGrad = ctx.createLinearGradient(-sp.length / 2, 0, sp.length / 2, 0);
+  bladeGrad.addColorStop(0, "#0a4a63");
+  bladeGrad.addColorStop(0.5, "#4fd6e8");
+  bladeGrad.addColorStop(1, "#0a4a63");
+  ctx.fillStyle = bladeGrad;
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = 0.8;
+  roundRect(ctx, -sp.length / 2, -sp.thickness / 2, sp.length, sp.thickness, sp.thickness / 3);
+  ctx.fill();
+  ctx.stroke();
+
+  // 中心ハブ
+  const hub = ctx.createRadialGradient(0, 0, 0.5, 0, 0, sp.thickness * 0.9);
+  hub.addColorStop(0, "#fff3c4");
+  hub.addColorStop(1, "#a98a4a");
+  ctx.fillStyle = hub;
+  ctx.beginPath();
+  ctx.arc(0, 0, sp.thickness * 0.7, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ---------------- パスカーブ ----------------
+
+function drawCurves(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  for (const curve of board.curves) drawCurve(ctx, curve);
+}
+
+/** curve.points(区分2次ベジェの制御点列)をたどって Path2D を組み立てる。
+ * points.length===3 なら単純に1区間、5以上ならその都度2点ずつ端点共有で
+ * ずらしながら複数区間を繋げる(layout.ts の buildCurveBodies と同じ考え方)。 */
+function traceCurvePath(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]): void {
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 0; i + 2 < points.length; i += 2) {
+    ctx.quadraticCurveTo(points[i + 1].x, points[i + 1].y, points[i + 2].x, points[i + 2].y);
+  }
+}
+
+function drawCurve(ctx: CanvasRenderingContext2D, curve: CurveObstacle): void {
+  if (curve.points.length < 3) return;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // 影
+  ctx.strokeStyle = "rgba(0,0,0,0.3)";
+  ctx.lineWidth = curve.thickness + 1.5;
+  ctx.save();
+  ctx.translate(0.8, 1);
+  traceCurvePath(ctx, curve.points);
+  ctx.restore();
+  ctx.stroke();
+
+  // 金属質のストローク本体(始点→終点のグラデーション)
+  const p0 = curve.points[0];
+  const pn = curve.points[curve.points.length - 1];
+  const grad = ctx.createLinearGradient(p0.x, p0.y, pn.x, pn.y);
+  grad.addColorStop(0, "#fff3c4");
+  grad.addColorStop(0.5, "#d9b45a");
+  grad.addColorStop(1, "#8a6a2a");
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = curve.thickness;
+  traceCurvePath(ctx, curve.points);
+  ctx.stroke();
 
   ctx.restore();
 }
