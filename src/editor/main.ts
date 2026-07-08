@@ -1381,45 +1381,56 @@ document.getElementById("btn-quicksim")!.addEventListener("click", () => {
   runQuickSimulation(power, shots);
 });
 
-// ---------------- 1000円回転数シミュレーション(賞球フィードバック込みの本物の経済シミュレーション) ----------------
-// 上の「簡易シミュレーション」は固定発射数からヘソ率で線形計算するだけで、賞球で増えた玉を
-// 実際に撃ち込む効果(フィードバック)を反映していない。こちらは src/main.ts の
-// tickLaunch/handleBoardEvent/tickDenchu/openDenchuIfSupported/handleGameEvent と全く同じ
-// 経済モデルを、使い捨ての PhysicsCore + PachinkoGame で再現し、
-// 「1000円(持ち玉250発)で実際に何回転するか」を賞球の再投入も含めて正確に計測する。
+// ---------------- 1000円回転数シミュレーション(大当たり抽選を無効化した経済シミュレーション) ----------------
+// 上の「簡易シミュレーション」は固定発射数からヘソ率で線形計算するだけで、通常入賞で増えた玉を
+// 実際に撃ち込む効果(フィードバック)を反映していない。
+//
+// 【設計変更の経緯】当初は本物のPachinkoGameをそのまま使い、大当たり(jackpot-start)が
+// 発生したら打ち切って複数試行(60回)平均する方式だったが、「重い・遅い」という指摘を受けた。
+// 考えてみれば、知りたいのは「釘配置の物理的な回転効率(通常時)」であって「大当たりを
+// 引けるかどうかの運」ではない。ならば複数試行して運の影響を平均でならすのではなく、
+// そもそも大当たり抽選そのものを無効化してしまえば、1回の実行だけで安定した値が
+// 得られ、かつ大当たりの運が一切混ざらない(ユーザー提案の方式)。
+//
+// 【実装方法】PachinkoGame はコンストラクタで乱数関数(rng)を差し替えられる
+// (src/game/stateMachine.ts参照)。src/game/lottery.ts の spin() は、1回の変動につき
+// 最初に呼ばれる rng() が必ず大当たり判定(hit = rng() < prob)であるため、
+// 「次の1回だけ」大きい値(0.999999)を返すラッパーをPachinkoGameのupdate()呼び出し
+// 直前に必ず一度アームすることで、変動が始まるたびにその1回目だけ大当たり抽選を
+// 強制的にハズレにする。2回目以降の呼び出し(リーチ判定・図柄選択)は本物の
+// Math.random()を使うので、図柄抽選内部の「左右不一致になるまでループ」処理等が
+// 無限ループする心配もない。
 
 /** 1発ごとに進める固定シミュレーション刻み(ms)。実時間を待たずに一気に進める */
 const YEN1000_SIM_STEP_MS = 33;
-/** 安全装置: 極端な確率(大当たり連続等)で終わらなくなることを防ぐ上限発射数 */
+/** 安全装置: 万一のロジック異常で終わらなくなることを防ぐ上限発射数 */
 const YEN1000_SIM_MAX_SHOTS = 20000;
 /** 安全装置: 実時間換算30分に相当するシミュレーション内時間(ms)の上限 */
 const YEN1000_SIM_MAX_TIME_MS = 1_800_000;
 
-interface Yen1000Trial {
+interface Yen1000Result {
   spins: number;
   shots: number;
-  hitJackpot: boolean;
 }
 
 /**
- * 1000円(持ち玉250発)を1試行分シミュレーションする。
- *
- * **重要**: 大当たり(jackpot-start)が発生した時点でその試行は即座に打ち切る。
- * 大当たり後の出玉(アタッカー賞球13玉×最大9カウント×最大16R≒最大1872玉、確変中の
- * 電チュー連続入賞等)まで撃ち込み続けると、「その1000円セッションでたまたま大当たりを
- * 引けたかどうか」という運の要素が回転数に混ざってしまい、実機でよく言われる
- * 「1000円で15〜20回転」という通常時の回転効率(釘の物理的な性能)の指標とは
- * 全く別のものになってしまう(この機種の確率1/99.9では、賞球を撃ち込み続けた場合
- * 1000円分のセッション中に大当たりを引く確率は約98%にも達し、ほぼ毎回このバイアスが
- * かかってしまうことを実測で確認した)。
- *
- * そのため「通常入賞(ヘソ・一般入賞)による玉の再投入は含めるが、大当たり由来の
- * 出玉は含めない」形にすることで、要望どおり「他入賞で増えた球数も含めて」
- * かつ実機の指標と比較可能な回転数を1試行ぶん計測する。
+ * 1000円(持ち玉250発)分をシミュレーションする。大当たり抽選を無効化しているため
+ * 大当たりは一切発生せず、1回の実行だけで安定した「通常時の回転効率」を計測できる。
  */
-function simulateYen1000Trial(power: number): Yen1000Trial {
+function simulateYen1000(power: number): Yen1000Result {
   const sim = new PhysicsCore(data);
-  const simGame = new PachinkoGame();
+
+  // 変動が始まるたびに最初の1回だけ大きい値を返す乱数ラッパー。
+  // これにより spin() 内の hit 判定(=最初の rng() 呼び出し)だけを確実にハズレにする。
+  let forceMissOnNextCall = false;
+  const noJackpotRng = (): number => {
+    if (forceMissOnNextCall) {
+      forceMissOnNextCall = false;
+      return 0.999999; // SPEC.kakuhenProb(約0.101)より十分大きいので必ずハズレになる
+    }
+    return Math.random();
+  };
+  const simGame = new PachinkoGame(noJackpotRng);
 
   // 1000円分の持ち玉から開始する(500円=125玉なので1000円=250発)
   let balls = (1000 / SPEC.lendYen) * SPEC.lendBalls;
@@ -1427,18 +1438,16 @@ function simulateYen1000Trial(power: number): Yen1000Trial {
   let spins = 0;
   let simTimeMs = 0;
   let launchTimer = 0;
-  let hitJackpot = false;
 
   for (;;) {
-    if (hitJackpot) break; // 大当たりが始まった時点でこの試行は終了(出玉分は撃ち込まない)
-
     // 終了判定: 持ち玉が尽き、盤面上の玉もなく、変動・保留も残っていなければ収束完了
+    // (大当たり抽選を無効化しているため phase が "jackpot" になることはない)
     const stillPlaying = balls > 0 || sim.ballsInPlay() > 0 || simGame.phase !== "idle" || simGame.holdCount > 0;
     if (!stillPlaying) break;
 
     if (shots >= YEN1000_SIM_MAX_SHOTS || simTimeMs >= YEN1000_SIM_MAX_TIME_MS) {
       logger.error(
-        `1000円回転数シミュレーション: 安全装置により1試行を強制終了しました` +
+        `1000円回転数シミュレーション: 安全装置により強制終了しました` +
           `(発射数=${shots}, 経過シミュレーション時間=${simTimeMs}ms)。`,
       );
       break;
@@ -1458,73 +1467,59 @@ function simulateYen1000Trial(power: number): Yen1000Trial {
     }
 
     // 物理を進め、発生したBoardEventをゲームロジックへ転送しつつ、通常入賞の賞球で
-    // 持ち玉を増やす(src/main.tsのhandleBoardEventと同じ賞球テーブル=SPEC.payoutを使う。
-    // ただしアタッカー賞球は「大当たり由来の出玉」なので、ここでは持ち玉に加算しない=
-    // 大当たり中の追加発射が発生しないようにする)。
+    // 持ち玉を増やす(要望通り「他入賞で増えた球数も含めて」)。
     const events = sim.update(YEN1000_SIM_STEP_MS);
     for (const ev of events) {
       simGame.onBoardEvent(ev);
       if (ev.type === "heso") balls += SPEC.payout.heso;
       else if (ev.type === "pocket") balls += SPEC.payout.pocket;
-      // denchu/attackerは電サポ・大当たり中にのみ発生し得るため、通常時の回転効率には含めない。
+      // denchu/attackerは電サポ・大当たり中にのみ発生するが、大当たり抽選を
+      // 無効化しているためそもそも起こらない(念のため加算対象からも外している)。
     }
 
-    // ゲームロジックの時間を進める。jackpot-startが来たら即座に打ち切りフラグを立てる
-    // (アタッカー開閉やラウンド進行はもう追わない。回転数はこの時点までの値を採用する)。
+    // ゲームロジックの時間を進める直前に「次の1回だけハズレ」フラグを立てる。
+    // このステップ内で新しい変動が始まればその hit 判定だけが強制ハズレになり、
+    // 変動が始まらなければ何も消費されず次のステップに持ち越されるだけなので安全。
+    forceMissOnNextCall = true;
     const gameEvents = simGame.update(YEN1000_SIM_STEP_MS);
     for (const ev of gameEvents) {
       if (ev.type === "spin-start") spins++;
-      else if (ev.type === "jackpot-start") hitJackpot = true;
+      else if (ev.type === "jackpot-start") {
+        // 大当たり抽選は無効化しているため理論上ここには来ないはずだが、
+        // 万一lottery.ts側の呼び出し順序が変わってこの前提が崩れた場合に
+        // 気づけるよう、念のため警告だけ出して打ち切る。
+        logger.error("1000円回転数シミュレーション: 大当たり抽選の無効化に失敗しています(lottery.tsの実装変更を確認してください)");
+        return { spins, shots };
+      }
     }
 
     simTimeMs += YEN1000_SIM_STEP_MS;
   }
 
-  return { spins, shots, hitJackpot };
+  return { spins, shots };
 }
 
-/** 1000円回転数シミュレーションの試行回数(大当たり有無による1試行ごとの大きなブレを平均化するため) */
-function runYen1000Simulation(power: number, trials: number): void {
+function runYen1000Simulation(power: number): void {
   const statusEl = document.getElementById("yen1000sim-status")!;
   statusEl.textContent = "実行中…";
-  logger.log("editor", `1000円回転数シミュレーション開始: power=${power} 試行回数=${trials}`);
+  logger.log("editor", `1000円回転数シミュレーション開始: power=${power}`);
 
   // ブラウザに「実行中…」を描画させてから重い同期ループへ入る(簡易シミュレーションと同じ手法)
   window.setTimeout(() => {
-    let sumSpins = 0;
-    let sumShots = 0;
-    let jackpotHits = 0;
+    const result = simulateYen1000(power);
 
-    for (let i = 0; i < trials; i++) {
-      const result = simulateYen1000Trial(power);
-      sumSpins += result.spins;
-      sumShots += result.shots;
-      if (result.hitJackpot) jackpotHits++;
-    }
-
-    const avgSpins = sumSpins / trials;
-    const avgShots = sumShots / trials;
-    const jackpotRate = (jackpotHits / trials) * 100;
-
-    document.getElementById("yen1000sim-spins")!.textContent = avgSpins.toFixed(1);
-    document.getElementById("yen1000sim-shots")!.textContent = avgShots.toFixed(1);
-    document.getElementById("yen1000sim-jackpots")!.textContent =
-      `${jackpotHits}/${trials}試行 (${jackpotRate.toFixed(1)}%)`;
+    document.getElementById("yen1000sim-spins")!.textContent = String(result.spins);
+    document.getElementById("yen1000sim-shots")!.textContent = String(result.shots);
     (document.getElementById("yen1000sim-result") as HTMLElement).style.display = "block";
 
     statusEl.textContent = "完了";
-    logger.log(
-      "editor",
-      `1000円回転数シミュレーション完了: 平均回転数=${avgSpins.toFixed(1)}回転 ` +
-        `平均発射数=${avgShots.toFixed(1)} 大当たり率=${jackpotHits}/${trials}(${jackpotRate.toFixed(1)}%)`,
-    );
+    logger.log("editor", `1000円回転数シミュレーション完了: 回転数=${result.spins}回転 発射数=${result.shots}`);
   }, 10);
 }
 
 document.getElementById("btn-yen1000sim")!.addEventListener("click", () => {
   const power = Number((document.getElementById("sim-power") as HTMLInputElement).value) || 0.6;
-  const trials = Math.max(1, Math.round(Number((document.getElementById("yen1000sim-trials") as HTMLInputElement).value) || 60));
-  runYen1000Simulation(power, trials);
+  runYen1000Simulation(power);
 });
 
 // ---------------- 描画ループ(盤面 + エディタ用オーバーレイ) ----------------

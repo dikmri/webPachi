@@ -274,25 +274,20 @@
           <section class="panel">
             <h2>1000円回転数シミュレーション</h2>
             <p class="muted">
-              持ち玉250発(1000円分)を、実際のゲームロジック(保留・変動・電チュー・賞球の
-              再投入)込みで、大当たりに当たるか玉が尽きるまで撃つ試行を複数回繰り返し、
-              「通常時の回転効率」としての平均回転数を計測します(大当たりを引いた後の
-              出玉での延長回転は含みません。大当たりに当たった時点で1試行を終了し、
-              そこまでの回転数を採用します)。上の「簡易シミュレーション」の power 欄を
-              流用します。
+              持ち玉250発(1000円分)を、実際のゲームロジック(保留・変動・ヘソ/一般入賞の
+              賞球再投入)込みで玉が尽きるまで一気に撃ちます。知りたいのは「釘配置の
+              通常時の回転効率」であり大当たりの運ではないため、<strong>大当たり抽選は
+              シミュレーション中だけ無効化</strong>しています(実際のゲームでは通常通り
+              抽選されます)。これにより1回の実行だけで安定した回転数が得られます。
+              上の「簡易シミュレーション」の power 欄を流用します。
             </p>
-            <div class="prop-row">
-              <label for="yen1000sim-trials">試行回数</label>
-              <input type="number" id="yen1000sim-trials" value="60" min="10" max="500" step="10" />
-            </div>
             <button id="btn-yen1000sim">1000円回転数シミュレーション実行</button>
             <p id="yen1000sim-status" class="muted"></p>
             <div id="yen1000sim-result" style="display: none">
-              <div class="sim-highlight">平均回転数: <span id="yen1000sim-spins">-</span> 回転</div>
+              <div class="sim-highlight">回転数: <span id="yen1000sim-spins">-</span> 回転</div>
               <table class="sim-table">
                 <tbody>
-                  <tr><th>平均発射数(通常入賞分含む)</th><td id="yen1000sim-shots">-</td></tr>
-                  <tr><th>大当たり率(試行中)</th><td id="yen1000sim-jackpots">-</td></tr>
+                  <tr><th>発射数(通常入賞分含む)</th><td id="yen1000sim-shots">-</td></tr>
                 </tbody>
               </table>
             </div>
