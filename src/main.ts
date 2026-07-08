@@ -116,6 +116,7 @@ const stats: Stats = {
   currentDiff: 0,
   mode: "normal",
   phase: "idle",
+  rotationPer1000: 0,
 };
 
 const startedAtMs = performance.now();
@@ -128,6 +129,8 @@ function currentElapsedMin(): number {
 /** 差玉 = 総獲得賞球 - 総発射数(1発=1玉購入相当) */
 function recalcDiff(): void {
   stats.currentDiff = player.totalPayout - player.totalShot;
+  // 投資額1000円あたりの回転数(他入賞で増えた玉を撃ち込んだ分の回転も含む)
+  stats.rotationPer1000 = player.investedYen > 0 ? stats.totalSpins / (player.investedYen / 1000) : 0;
 }
 
 /** スランプグラフ用に1分間隔でサンプリングする(呼び出しは毎フレームでOK) */
@@ -367,6 +370,7 @@ function frameLoop(ts: number): void {
   board.setAttackerOpen(game.attackerShouldOpen);
 
   stats.phase = game.phase;
+  recalcDiff(); // totalSpinsの更新(handleGameEvent内)とタイミングがずれないよう毎フレーム再計算する
   reels.update(dtMs);
 
   sampleSlumpIfNeeded();

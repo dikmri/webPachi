@@ -185,6 +185,12 @@ export interface Stats {
   mode: Mode;
   /** 現在の状態 */
   phase: MachinePhase;
+  /**
+   * 投資額1000円あたりの回転数(totalSpins / (投資額/1000))。
+   * 他入賞(賞球)で増えた玉を撃ち込んだ分の回転も含む、実際の投資対効果。
+   * 投資額0円の間は0。
+   */
+  rotationPer1000: number;
 }
 
 export interface PlayerState {

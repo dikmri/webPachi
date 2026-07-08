@@ -207,6 +207,20 @@ button.active:hover:not(:disabled) { background: #34c674; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 「1000円回転数シミュレーション」の結果で最も知りたい数値(総回転数)を大きく強調表示する */
+.sim-highlight {
+  font-size: 22px;
+  font-weight: 700;
+  color: #3ddc84;
+  text-align: center;
+  padding: 10px 6px;
+  margin: 8px 0 4px;
+  background: #10241a;
+  border: 1px solid #2c5a3e;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 .log-view {
   height: 140px;
   overflow-y: auto;

@@ -213,6 +213,11 @@
             <h2>ステータス</h2>
             <div class="prop-row"><span class="prop-label">釘総数</span><span id="status-nail-count">0</span></div>
             <div class="prop-row"><span class="prop-label">盤面内の玉</span><span id="status-ball-count">0</span></div>
+            <div class="prop-row"><span class="prop-label">保留</span><span id="status-hold">0/4</span></div>
+            <div class="prop-row"><span class="prop-label">状態</span><span id="status-phase">客待ち</span></div>
+            <div class="prop-row"><span class="prop-label">モード</span><span id="status-mode">通常</span></div>
+            <div class="prop-row"><span class="prop-label">総回転数(このセッション)</span><span id="status-total-spins">0</span></div>
+            <div class="prop-row"><span class="prop-label">大当たり回数(このセッション)</span><span id="status-jackpots">0</span></div>
           </section>
         </aside>
 
@@ -264,6 +269,26 @@
                 <tr><th>回転/千円(250発)</th><td id="sim-rotation">-</td></tr>
               </tbody>
             </table>
+          </section>
+
+          <section class="panel">
+            <h2>1000円回転数シミュレーション</h2>
+            <p class="muted">
+              持ち玉250発(1000円分)を、実際のゲームロジック(保留・変動・大当たり・電チュー・
+              アタッカー・賞球の再投入)込みで撃ち尽くすまで一気に進め、正確な総回転数を計測します。
+              上の「簡易シミュレーション」の power 欄を流用します。
+            </p>
+            <button id="btn-yen1000sim">1000円回転数シミュレーション実行</button>
+            <p id="yen1000sim-status" class="muted"></p>
+            <div id="yen1000sim-result" style="display: none">
+              <div class="sim-highlight">総回転数: <span id="yen1000sim-spins">-</span> 回転</div>
+              <table class="sim-table">
+                <tbody>
+                  <tr><th>総発射数(賞球分含む)</th><td id="yen1000sim-shots">-</td></tr>
+                  <tr><th>大当たり回数</th><td id="yen1000sim-jackpots">-</td></tr>
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section class="panel">

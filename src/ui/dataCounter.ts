@@ -22,6 +22,7 @@ export class DataCounterUI implements DataCounter {
   private elStart!: HTMLElement;
   private elTotalStart!: HTMLElement;
   private elPrev!: HTMLElement;
+  private elRotation!: HTMLElement;
   private historyList!: HTMLElement;
 
   private readonly slumpGraph = new SlumpGraphUI();
@@ -80,6 +81,7 @@ export class DataCounterUI implements DataCounter {
     this.elStart = makeDigit("スタート", "dc-color-green");
     this.elTotalStart = makeDigit("総スタート", "dc-color-white");
     this.elPrev = makeDigit("前回", "dc-color-white");
+    this.elRotation = makeDigit("回転/千円", "dc-color-orange");
 
     pageCounts.appendChild(digitsRow);
 
@@ -116,6 +118,8 @@ export class DataCounterUI implements DataCounter {
     this.elTotalStart.textContent = String(stats.totalSpins).padStart(5, "0");
     const prev = stats.history[0];
     this.elPrev.textContent = prev ? String(prev.spins).padStart(4, "0") : "----";
+    // 他入賞で増えた玉を撃ち込んだ分の回転も含む、実際の投資額あたりの回転数
+    this.elRotation.textContent = stats.rotationPer1000.toFixed(1);
 
     this.renderHistory(stats.history);
 

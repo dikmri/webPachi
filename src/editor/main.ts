@@ -26,8 +26,13 @@ import {
 } from "../board/boardData";
 import { PhysicsCore, type PhysicsSnapshot, centerBoxRectFor, CENTER_BOX_W, CENTER_BOX_H } from "../board/layout";
 import { drawBoard, type RenderState } from "../board/renderer";
-import { BALL_RADIUS, NAIL_RADIUS, SPEC, type BoardEvent } from "../types";
+import { BALL_RADIUS, NAIL_RADIUS, SPEC, type BoardEvent, type MachinePhase, type Mode } from "../types";
 import { logger } from "../logger";
+// テスト発射・シミュレーションに「本物のゲームプレイ」を再現するため、本編(main.ts)と
+// 全く同じ PachinkoGame(保留・変動・大当たり・確変/時短の状態機械)を使う。
+// エディタはこれまで PhysicsCore(生の物理)だけでテスト発射しており、ヘソに入れても
+// 保留が増えず変動も大当たりも起きなかった問題をこれで解消する。
+import { PachinkoGame } from "../game/stateMachine";
 
 // ---------------- DOM取得 ----------------
 
@@ -44,6 +49,14 @@ logger.log("editor", "盤面エディタ起動開始");
 let data: BoardData = loadInitialData();
 /** テスト発射用の物理ワールド。編集(追加・移動・削除・確定)のたびに作り直す */
 let core: PhysicsCore = new PhysicsCore(data);
+/** テスト発射用のゲームロジック(保留・変動・大当たり・確変/時短)。
+ * core と同じく、盤面編集(rebuildPhysics)のたびに作り直してリセットする。 */
+let game: PachinkoGame = new PachinkoGame();
+
+/** このセッション(盤面再構築のたびに0にリセット)の総回転数・大当たり回数。
+ * ステータスパネルの「総回転数(このセッション)」「大当たり回数(このセッション)」に表示する。 */
+let editorTotalSpins = 0;
+let editorJackpots = 0;
 
 function loadInitialData(): BoardData {
   try {
@@ -531,10 +544,18 @@ function scheduleSave(): void {
   }, 400);
 }
 
-/** 物理ワールドを現在の data から再構築する(テスト発射中の玉はすべて消える) */
+/** 物理ワールドを現在の data から再構築する(テスト発射中の玉はすべて消える)。
+ * 盤面を編集し直したら保留・変動状態もリセットするのが自然なため、ゲームロジック
+ * (PachinkoGame)・電チュー開放タイマー・このセッションの回転数/大当たり回数カウンタも
+ * 同時に作り直す。 */
 function rebuildPhysics(): void {
   core = new PhysicsCore(data);
+  game = new PachinkoGame();
+  editorDenchuOpenRemaining = 0;
+  editorTotalSpins = 0;
+  editorJackpots = 0;
   updateStatusBar();
+  updateGameStatusPanel();
 }
 
 /** 構造的な変更(追加・移動確定・削除・読込・リセット・Undo)の後に必ず呼ぶ */
@@ -545,6 +566,41 @@ function markDirty(): void {
 
 function updateStatusBar(): void {
   document.getElementById("status-nail-count")!.textContent = String(data.nails.length);
+}
+
+/** MachinePhase を日本語表示に変換する(ステータスパネル用) */
+function phaseLabelJa(phase: MachinePhase): string {
+  switch (phase) {
+    case "idle":
+      return "客待ち";
+    case "spinning":
+      return "変動中";
+    case "reach":
+      return "リーチ中";
+    case "jackpot":
+      return "大当たり中";
+  }
+}
+
+/** Mode を日本語表示に変換する(ステータスパネル用) */
+function modeLabelJa(mode: Mode): string {
+  switch (mode) {
+    case "normal":
+      return "通常";
+    case "kakuhen":
+      return "確変";
+    case "jitan":
+      return "時短";
+  }
+}
+
+/** ステータスパネルの保留・状態・モード・回転数表示を更新する(本編main.tsのPachinkoGameと同じgetterを使う) */
+function updateGameStatusPanel(): void {
+  document.getElementById("status-hold")!.textContent = `${game.holdCount}/${SPEC.holdMax}`;
+  document.getElementById("status-phase")!.textContent = phaseLabelJa(game.phase);
+  document.getElementById("status-mode")!.textContent = modeLabelJa(game.mode);
+  document.getElementById("status-total-spins")!.textContent = String(editorTotalSpins);
+  document.getElementById("status-jackpots")!.textContent = String(editorJackpots);
 }
 
 // ---------------- キャンバス座標変換 ----------------
@@ -1221,6 +1277,28 @@ document.getElementById("chk-autofire")!.addEventListener("change", (e) => {
   logger.log("editor", `オート連射: ${autoFire ? "開始" : "停止"}`);
 });
 
+// ---------------- 電チュー開放タイマー(テスト発射中のゲームロジック統合) ----------------
+// src/main.ts の DENCHU_OPEN_MS/openDenchuIfSupported/tickDenchu と全く同じロジック。
+// スルーゲート通過時、電サポ中(game.denSupport)なら電チューを1500ms開放する。
+
+const EDITOR_DENCHU_OPEN_MS = 1500;
+let editorDenchuOpenRemaining = 0;
+
+function openDenchuIfSupportedInEditor(): void {
+  if (!game.denSupport) return;
+  editorDenchuOpenRemaining = EDITOR_DENCHU_OPEN_MS;
+  core.setDenchuOpen(true);
+}
+
+function tickDenchuInEditor(dtMs: number): void {
+  if (editorDenchuOpenRemaining <= 0) return;
+  editorDenchuOpenRemaining -= dtMs;
+  if (editorDenchuOpenRemaining <= 0) {
+    editorDenchuOpenRemaining = 0;
+    core.setDenchuOpen(false);
+  }
+}
+
 // ---------------- 簡易シミュレーション(即時の回転率確認) ----------------
 // scripts/simulate.ts の simulatePower() と同じロジックをブラウザ内で実行する。
 // 画面上のテスト発射(core)とは別に、この場だけの使い捨て PhysicsCore を作って
@@ -1301,6 +1379,149 @@ document.getElementById("btn-quicksim")!.addEventListener("click", () => {
   const power = Number((document.getElementById("sim-power") as HTMLInputElement).value) || 0.6;
   const shots = Math.max(1, Math.round(Number((document.getElementById("sim-shots") as HTMLInputElement).value) || 300));
   runQuickSimulation(power, shots);
+});
+
+// ---------------- 1000円回転数シミュレーション(賞球フィードバック込みの本物の経済シミュレーション) ----------------
+// 上の「簡易シミュレーション」は固定発射数からヘソ率で線形計算するだけで、賞球で増えた玉を
+// 実際に撃ち込む効果(フィードバック)を反映していない。こちらは src/main.ts の
+// tickLaunch/handleBoardEvent/tickDenchu/openDenchuIfSupported/handleGameEvent と全く同じ
+// 経済モデルを、使い捨ての PhysicsCore + PachinkoGame で再現し、
+// 「1000円(持ち玉250発)で実際に何回転するか」を賞球の再投入も含めて正確に計測する。
+
+/** 1発ごとに進める固定シミュレーション刻み(ms)。実時間を待たずに一気に進める */
+const YEN1000_SIM_STEP_MS = 33;
+/** 安全装置: 極端な確率(大当たり連続等)で終わらなくなることを防ぐ上限発射数 */
+const YEN1000_SIM_MAX_SHOTS = 20000;
+/** 安全装置: 実時間換算30分に相当するシミュレーション内時間(ms)の上限 */
+const YEN1000_SIM_MAX_TIME_MS = 1_800_000;
+
+function runYen1000Simulation(power: number): void {
+  const statusEl = document.getElementById("yen1000sim-status")!;
+  statusEl.textContent = "実行中…";
+  logger.log("editor", `1000円回転数シミュレーション開始: power=${power}`);
+
+  // ブラウザに「実行中…」を描画させてから重い同期ループへ入る(簡易シミュレーションと同じ手法)
+  window.setTimeout(() => {
+    const sim = new PhysicsCore(data);
+    const simGame = new PachinkoGame();
+
+    // 1000円分の持ち玉から開始する(500円=125玉なので1000円=250発)
+    let balls = (1000 / SPEC.lendYen) * SPEC.lendBalls;
+    let totalShots = 0;
+    let totalSpins = 0;
+    let totalJackpots = 0;
+    let simTimeMs = 0;
+    let launchTimer = 0;
+    let aborted = false;
+
+    // 電チュー開放タイマー(src/main.tsのDENCHU_OPEN_MS/openDenchuIfSupported/tickDenchuと同じロジック)
+    const DENCHU_OPEN_MS = 1500;
+    let denchuOpenRemaining = 0;
+    const openDenchuIfSupported = (): void => {
+      if (!simGame.denSupport) return;
+      denchuOpenRemaining = DENCHU_OPEN_MS;
+      sim.setDenchuOpen(true);
+    };
+    const tickDenchu = (dtMs: number): void => {
+      if (denchuOpenRemaining <= 0) return;
+      denchuOpenRemaining -= dtMs;
+      if (denchuOpenRemaining <= 0) {
+        denchuOpenRemaining = 0;
+        sim.setDenchuOpen(false);
+      }
+    };
+
+    for (;;) {
+      // 終了判定: 持ち玉が尽き、盤面上の玉もなく、変動・大当たり・保留も残っていなければ収束完了
+      const stillPlaying = balls > 0 || sim.ballsInPlay() > 0 || simGame.phase !== "idle" || simGame.holdCount > 0;
+      if (!stillPlaying) break;
+
+      if (totalShots >= YEN1000_SIM_MAX_SHOTS || simTimeMs >= YEN1000_SIM_MAX_TIME_MS) {
+        aborted = true;
+        logger.error(
+          `1000円回転数シミュレーション: 安全装置により強制終了しました` +
+            `(総発射数=${totalShots}, 経過シミュレーション時間=${simTimeMs}ms)。` +
+            `確率設定や大当たり終了条件に異常がある可能性があります。`,
+        );
+        break;
+      }
+
+      // 発射(持ち玉が残っている間だけ、発射間隔ごとに1発。src/main.tsのtickLaunchと同じパターン)
+      if (balls > 0) {
+        launchTimer += YEN1000_SIM_STEP_MS;
+        while (launchTimer >= SPEC.launchIntervalMs && balls > 0) {
+          launchTimer -= SPEC.launchIntervalMs;
+          sim.launch(power);
+          balls--;
+          totalShots++;
+        }
+      } else {
+        launchTimer = 0;
+      }
+
+      tickDenchu(YEN1000_SIM_STEP_MS);
+
+      // 物理を進め、発生したBoardEventをゲームロジックへ転送しつつ、賞球で持ち玉を増やす
+      // (src/main.tsのhandleBoardEventと同じ賞球テーブル=SPEC.payoutを使う)。
+      const events = sim.update(YEN1000_SIM_STEP_MS);
+      for (const ev of events) {
+        simGame.onBoardEvent(ev);
+        switch (ev.type) {
+          case "heso":
+            balls += SPEC.payout.heso;
+            break;
+          case "denchu":
+            balls += SPEC.payout.denchu;
+            break;
+          case "pocket":
+            balls += SPEC.payout.pocket;
+            break;
+          case "attacker":
+            balls += SPEC.payout.attacker;
+            break;
+          case "gate":
+            openDenchuIfSupported();
+            break;
+          default:
+            break;
+        }
+      }
+
+      // ゲームロジックの時間を進め、アタッカー開閉・回転数/大当たり回数カウンタを更新する
+      // (src/main.tsのhandleGameEventのround-start/round-end/jackpot-endと同じパターン)。
+      const gameEvents = simGame.update(YEN1000_SIM_STEP_MS);
+      for (const ev of gameEvents) {
+        if (ev.type === "round-start") {
+          sim.setAttackerOpen(true);
+        } else if (ev.type === "round-end" || ev.type === "jackpot-end") {
+          sim.setAttackerOpen(false);
+        } else if (ev.type === "spin-start") {
+          totalSpins++;
+        } else if (ev.type === "jackpot-start") {
+          totalJackpots++;
+        }
+      }
+      sim.setAttackerOpen(simGame.attackerShouldOpen);
+
+      simTimeMs += YEN1000_SIM_STEP_MS;
+    }
+
+    document.getElementById("yen1000sim-spins")!.textContent = String(totalSpins);
+    document.getElementById("yen1000sim-shots")!.textContent = String(totalShots);
+    document.getElementById("yen1000sim-jackpots")!.textContent = String(totalJackpots);
+    (document.getElementById("yen1000sim-result") as HTMLElement).style.display = "block";
+
+    statusEl.textContent = aborted ? "完了(安全装置により強制終了しました。ログを確認してください)" : "完了";
+    logger.log(
+      "editor",
+      `1000円回転数シミュレーション完了: 総回転数=${totalSpins}回転 総発射数=${totalShots} 大当たり=${totalJackpots}回`,
+    );
+  }, 10);
+}
+
+document.getElementById("btn-yen1000sim")!.addEventListener("click", () => {
+  const power = Number((document.getElementById("sim-power") as HTMLInputElement).value) || 0.6;
+  runYen1000Simulation(power);
 });
 
 // ---------------- 描画ループ(盤面 + エディタ用オーバーレイ) ----------------
@@ -1471,7 +1692,35 @@ function frameLoop(ts: number): void {
     }
   }
 
-  core.update(dtMs);
+  // 電チュー開放タイマーの経過(src/main.tsのtickDenchuと同じく物理更新の直前で処理する)
+  tickDenchuInEditor(dtMs);
+
+  // 物理を進め、発生したBoardEventを本物のゲームロジック(PachinkoGame)へ流し込む。
+  // これによりエディタのテスト発射でも保留・変動・大当たりが実際に発生するようになる
+  // (src/main.tsのhandleBoardEventと全く同じパターン)。
+  const boardEvents = core.update(dtMs);
+  for (const ev of boardEvents) {
+    game.onBoardEvent(ev);
+    if (ev.type === "gate") openDenchuIfSupportedInEditor();
+  }
+
+  // ゲームロジックの時間を進め、発生したGameEventに応じてアタッカー開閉・回転数カウンタを更新する
+  // (src/main.tsのhandleGameEventのround-start/round-end/jackpot-endと全く同じパターン)。
+  const gameEvents = game.update(dtMs);
+  for (const ev of gameEvents) {
+    if (ev.type === "round-start") {
+      core.setAttackerOpen(true);
+    } else if (ev.type === "round-end" || ev.type === "jackpot-end") {
+      core.setAttackerOpen(false);
+    } else if (ev.type === "spin-start") {
+      editorTotalSpins++;
+    } else if (ev.type === "jackpot-start") {
+      editorJackpots++;
+    }
+  }
+
+  // 復帰時などの整合性のため、毎フレーム attackerShouldOpen と物理側の開閉状態を同期する(本編と同じ)
+  core.setAttackerOpen(game.attackerShouldOpen);
 
   const snap = core.snapshot();
   const state: RenderState = {
@@ -1479,14 +1728,15 @@ function frameLoop(ts: number): void {
     balls: snap.balls,
     windmillAngles: snap.windmillAngles,
     spinnerAngles: snap.spinnerAngles,
-    denchuOpen: false,
-    attackerOpen: false,
+    denchuOpen: snap.denchuOpen,
+    attackerOpen: snap.attackerOpen,
     board: data,
   };
   drawBoard(ctx, state);
   drawEditorOverlay(ctx, snap);
 
   document.getElementById("status-ball-count")!.textContent = String(core.ballsInPlay());
+  updateGameStatusPanel();
 
   requestAnimationFrame(frameLoop);
 }
