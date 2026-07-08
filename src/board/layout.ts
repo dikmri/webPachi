@@ -212,24 +212,53 @@ export const FIELD_RIGHT_WALL: Vec2[] = [
   { x: RIGHT_JOIN.x, y: 648 },
 ];
 
-// ---------------- センター役物(液晶枠。筐体固定) ----------------
+// ---------------- センター役物(液晶枠。サイズ固定・位置は取付部品として編集可能) ----------------
+// 従来は CENTER_BOX/STAGE_LEFT/STAGE_RIGHT/WARP_ENTRANCE/WARP_TARGET を
+// すべて筐体固定のモジュール定数として持っていたが、「モニタの位置も
+// 調整したい」という要望に応え、センター役物の中心座標を
+// BoardData.centerBox として取付部品側へ外部化した。サイズ(幅220・高さ180)
+// だけは引き続き固定なので、以下の関数はすべて BoardData を受け取り
+// centerBox(中心座標)から矩形・ステージ・ワープの座標を都度算出する。
 
-export const CENTER_BOX = { x0: 130, y0: 150, x1: 350, y1: 330 };
+/** センター役物の幅・高さ(サイズは固定。位置は BoardData.centerBox で編集する) */
+export const CENTER_BOX_W = 220;
+export const CENTER_BOX_H = 180;
 
-/** ワープ入口(液晶枠左側面のセンサー) */
-export const WARP_ENTRANCE = { x: 126, y: 215, w: 12, h: 70 };
-/** ワープでボールを転送する先(ステージ左端) */
-export const WARP_TARGET: Vec2 = { x: 152, y: 328 };
+/** BoardData.centerBox(中心座標)から矩形境界を求める */
+export function centerBoxRectFor(data: BoardData): { x0: number; y0: number; x1: number; y1: number } {
+  const { x, y } = data.centerBox;
+  return { x0: x - CENTER_BOX_W / 2, y0: y - CENTER_BOX_H / 2, x1: x + CENTER_BOX_W / 2, y1: y + CENTER_BOX_H / 2 };
+}
 
-/** ステージ(液晶下の皿)。中央に隙間があり、そこから落ちるとヘソ直上に落下する */
-export const STAGE_LEFT: [Vec2, Vec2] = [
-  { x: 150, y: 346 },
-  { x: 222, y: 333 },
-];
-export const STAGE_RIGHT: [Vec2, Vec2] = [
-  { x: 258, y: 333 },
-  { x: 330, y: 346 },
-];
+/** ワープ入口(液晶枠左側面のセンサー)。centerBox 位置に追従する */
+export function warpEntranceFor(data: BoardData): { x: number; y: number; w: number; h: number } {
+  const { x0, y0 } = centerBoxRectFor(data);
+  return { x: x0 - 4, y: y0 + 65, w: 12, h: 70 };
+}
+
+/** ワープでボールを転送する先(ステージ左端)。centerBox 位置に追従する */
+export function warpTargetFor(data: BoardData): Vec2 {
+  const { x0, y1 } = centerBoxRectFor(data);
+  return { x: x0 + 22, y: y1 - 2 };
+}
+
+/** ステージ左半分(液晶下の皿)。中央に隙間があり、そこから落ちるとヘソ直上に落下する */
+export function stageLeftFor(data: BoardData): [Vec2, Vec2] {
+  const { x0, y1 } = centerBoxRectFor(data);
+  return [
+    { x: x0 + 20, y: y1 + 16 },
+    { x: x0 + 92, y: y1 + 3 },
+  ];
+}
+
+/** ステージ右半分 */
+export function stageRightFor(data: BoardData): [Vec2, Vec2] {
+  const { x1, y1 } = centerBoxRectFor(data);
+  return [
+    { x: x1 - 92, y: y1 + 3 },
+    { x: x1 - 20, y: y1 + 16 },
+  ];
+}
 
 // ---------------- 風車(位置は取付部品=編集可能。腕の寸法・回転速度は筐体固定) ----------------
 
@@ -415,8 +444,8 @@ export function createWorld(data: BoardData): {
   bodies.push(...buildWallChain(RAIL_OUTER_WALL, 4, 0.25));
   bodies.push(...buildWallChain(FIELD_RIGHT_WALL, 6, 0.25));
 
-  // ---- センター役物(液晶枠)。中は完全に塞ぎ、玉は入れない ----
-  const cb = CENTER_BOX;
+  // ---- センター役物(液晶枠)。中は完全に塞ぎ、玉は入れない(位置はdata.centerBox由来) ----
+  const cb = centerBoxRectFor(data);
   bodies.push(
     Matter.Bodies.rectangle((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2, cb.x1 - cb.x0, cb.y1 - cb.y0, {
       isStatic: true,
@@ -426,12 +455,14 @@ export function createWorld(data: BoardData): {
     }),
   );
 
-  // ---- ステージ(液晶下の皿)。中央に隙間を残した緩斜面2枚 ----
-  bodies.push(buildSegment(STAGE_LEFT[0], STAGE_LEFT[1], 6, "stage"));
-  bodies.push(buildSegment(STAGE_RIGHT[0], STAGE_RIGHT[1], 6, "stage"));
+  // ---- ステージ(液晶下の皿)。中央に隙間を残した緩斜面2枚(位置はdata.centerBox由来) ----
+  const stageLeft = stageLeftFor(data);
+  const stageRight = stageRightFor(data);
+  bodies.push(buildSegment(stageLeft[0], stageLeft[1], 6, "stage"));
+  bodies.push(buildSegment(stageRight[0], stageRight[1], 6, "stage"));
 
-  // ---- ワープ入口(センサー。触れたらステージへ転送する) ----
-  const warp = WARP_ENTRANCE;
+  // ---- ワープ入口(センサー。触れたらステージへ転送する。位置はdata.centerBox由来) ----
+  const warp = warpEntranceFor(data);
   bodies.push(sensorRect(warp.x, warp.y, warp.w, warp.h, "warp"));
 
   // ---- 釘(縁釘・千鳥格子・天釘・命釘・道釘・ジャンプ釘・袖釘・寄せ釘 すべて。data由来) ----
@@ -1026,8 +1057,9 @@ export class PhysicsCore {
       } else if (other.label === "out") {
         this.removeBall(ball, { type: "out" });
       } else if (other.label === "warp") {
-        // ワープ入賞: ステージへ転送(得点イベントは発生しない)
-        Matter.Body.setPosition(ball, { x: WARP_TARGET.x, y: WARP_TARGET.y });
+        // ワープ入賞: ステージへ転送(得点イベントは発生しない。転送先はdata.centerBox由来)
+        const target = warpTargetFor(this.data);
+        Matter.Body.setPosition(ball, { x: target.x, y: target.y });
         Matter.Body.setVelocity(ball, { x: 0.6, y: 0 });
       }
     }

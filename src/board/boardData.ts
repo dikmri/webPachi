@@ -43,6 +43,13 @@ export interface BoardData {
   pockets: { x: number; y: number }[];
   /** 風車(削除不可・位置移動のみ編集可) */
   windmills: { x: number; y: number }[];
+  /**
+   * センター役物(液晶枠)の中心座標。幅(layout.tsのCENTER_BOX_W=220)・
+   * 高さ(同CENTER_BOX_H=180)は固定で、位置(中心座標)のみ編集可能。
+   * 削除不可(centerBoxはBoardDataに常に1個だけ存在する)。
+   * 旧形式(このフィールドが無いJSON)は normalizeBoardData() で補完すること。
+   */
+  centerBox: { x: number; y: number };
 }
 
 /** 盤面エディタが localStorage に保存する際のキー名(main.ts 側もこの名前を参照する) */
@@ -118,6 +125,10 @@ export const DEFAULT_BOARD_DATA: BoardData = {
     { x: 105, y: 290 },
     { x: 375, y: 290 },
   ],
+  // 従来の CENTER_BOX = {x0:130,y0:150,x1:350,y1:330}(幅220・高さ180)の
+  // 中心座標と完全に一致する値。この値を変えない限りリファクタ前後で
+  // 物理・描画とも一切挙動が変わらない。
+  centerBox: { x: 240, y: 240 },
 };
 
 /** BoardData の深いコピーを返す(エディタの編集・Undo・保存前後で参照を共有しないため) */
@@ -130,6 +141,7 @@ export function cloneBoardData(d: BoardData): BoardData {
     attacker: { ...d.attacker },
     pockets: d.pockets.map((p) => ({ ...p })),
     windmills: d.windmills.map((p) => ({ ...p })),
+    centerBox: { ...d.centerBox },
   };
 }
 
@@ -163,6 +175,15 @@ function isPointFeature(v: unknown): v is PointFeature {
  * 実行時の形状バリデーション。localStorage / JSONファイルなど、
  * 型情報を持たない外部由来の値(unknown)を安全に BoardData として
  * 扱えるかどうかをここで必ずチェックする。
+ *
+ * 注意: centerBox は「必須」にしていない。旧形式(centerBox追加前)に
+ * 保存済みの localStorage / JSON データには centerBox フィールドが
+ * 存在しないため、ここで必須にしてしまうと旧データが軒並み不正判定と
+ * なり、ユーザーが前回のエディタで積み上げた編集内容ごと消えてしまう
+ * (デフォルト盤面に差し戻ってしまう)。centerBox が無くても他の必須
+ * フィールドさえ揃っていれば true を返し、実際の補完は
+ * normalizeBoardData() 側の責務とする。ただし centerBox キー自体は
+ * 存在するのに形が壊れている(x/yが数値でない等)場合は不正として弾く。
  */
 export function isValidBoardData(v: unknown): v is BoardData {
   if (typeof v !== "object" || v === null) return false;
@@ -175,6 +196,20 @@ export function isValidBoardData(v: unknown): v is BoardData {
   if (!isPointFeature(o.attacker)) return false;
   if (!Array.isArray(o.pockets) || !o.pockets.every(isXY)) return false;
   if (!Array.isArray(o.windmills) || !o.windmills.every(isXY)) return false;
+  if (o.centerBox !== undefined && !isXY(o.centerBox)) return false;
 
   return true;
+}
+
+/**
+ * isValidBoardData() を通過した値を、常に centerBox を持つ完全な BoardData に
+ * 正規化する。旧形式(centerBoxフィールドが無い)データを読み込んだ場合は
+ * DEFAULT_BOARD_DATA.centerBox のコピーを補って返す(=センター役物は
+ * 従来通りの中央位置になるだけで、ユーザーの釘・役物編集内容は一切失われない)。
+ * localStorage / JSONファイルなど外部由来のデータを読み込んだ直後は、
+ * isValidBoardData() での検証に続けて必ずこの関数を通すこと。
+ */
+export function normalizeBoardData(v: BoardData): BoardData {
+  if (isXY(v.centerBox)) return v;
+  return { ...v, centerBox: { ...DEFAULT_BOARD_DATA.centerBox } };
 }

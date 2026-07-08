@@ -19,8 +19,9 @@ import {
   DEFAULT_BOARD_DATA,
   cloneBoardData,
   isValidBoardData,
+  normalizeBoardData,
 } from "../board/boardData";
-import { PhysicsCore, type PhysicsSnapshot } from "../board/layout";
+import { PhysicsCore, type PhysicsSnapshot, centerBoxRectFor, CENTER_BOX_W, CENTER_BOX_H } from "../board/layout";
 import { drawBoard, type RenderState } from "../board/renderer";
 import { BALL_RADIUS, NAIL_RADIUS, SPEC, type BoardEvent } from "../types";
 import { logger } from "../logger";
@@ -47,8 +48,12 @@ function loadInitialData(): BoardData {
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (isValidBoardData(parsed)) {
-        logger.log("editor", `localStorageの保存データを読み込みました(釘${parsed.nails.length}本)`);
-        return parsed;
+        // 旧形式(centerBoxフィールドが無い)データの救済。normalizeBoardData()を
+        // 必ず通すことで、centerBoxが欠けていてもデフォルト値で補完され、
+        // ユーザーが積み上げた釘・役物の編集内容は失われない。
+        const normalized = normalizeBoardData(parsed);
+        logger.log("editor", `localStorageの保存データを読み込みました(釘${normalized.nails.length}本)`);
+        return normalized;
       }
       logger.log("editor", "localStorageの保存データが不正な形式だったため無視し、デフォルト盤面を使用します");
     } else {
@@ -69,7 +74,8 @@ type ItemRef =
   | { kind: "gate" }
   | { kind: "attacker" }
   | { kind: "pocket"; index: number }
-  | { kind: "windmill"; index: number };
+  | { kind: "windmill"; index: number }
+  | { kind: "centerBox" };
 
 /** 釘は追加・削除・移動すべて可能。役物(ヘソ以下)は移動のみ可能(削除不可) */
 function isDeletable(item: ItemRef): boolean {
@@ -89,6 +95,8 @@ function getPos(item: ItemRef): { x: number; y: number } {
       return data.pockets[item.index];
     case "windmill":
       return data.windmills[item.index];
+    case "centerBox":
+      return data.centerBox;
   }
 }
 
@@ -107,6 +115,11 @@ function hitRadiusOf(item: ItemRef): number {
     case "pocket":
     case "windmill":
       return 10;
+    case "centerBox":
+      // センター役物は矩形の当たり判定(hitTest内で別途処理)を使うため、
+      // ここでの円形半径は選択ハイライト描画のフォールバック値としてのみ使う
+      // (実際の選択ハイライトは矩形で描画するため通常は参照されない)。
+      return Math.max(CENTER_BOX_W, CENTER_BOX_H) / 2;
   }
 }
 
@@ -131,6 +144,10 @@ function setItemXY(item: ItemRef, x: number, y: number): void {
       data.windmills[item.index].x = x;
       data.windmills[item.index].y = y;
       break;
+    case "centerBox":
+      data.centerBox.x = x;
+      data.centerBox.y = y;
+      break;
   }
 }
 
@@ -150,6 +167,8 @@ function describeItem(item: ItemRef): string {
       return `一般入賞口 #${item.index}`;
     case "windmill":
       return `風車 #${item.index}`;
+    case "centerBox":
+      return "センター役物(モニタ)";
   }
 }
 
@@ -178,7 +197,20 @@ function hitTest(x: number, y: number): ItemRef | null {
       bestDist = d;
     }
   }
-  return best;
+  if (best) return best;
+
+  // センター役物(モニタ)は220×180の大きな矩形のため、他の役物と同じ
+  // 「中心からの円形距離」判定だと矩形の隅をクリックしても選択できず
+  // 使いづらい。そのため、釘・ヘソ・電チュー・ゲート・アタッカー・
+  // 一般入賞口・風車のどれにもヒットしなかった場合のみ、クリック座標が
+  // centerBoxRectFor(data) の矩形内に入っているかを別途チェックする
+  // (優先順位を一番低くすることで、役物の上に置かれた釘などを誤って
+  // 掴んでしまうのを防ぐ)。
+  const rect = centerBoxRectFor(data);
+  if (x >= rect.x0 && x <= rect.x1 && y >= rect.y0 && y <= rect.y1) {
+    return { kind: "centerBox" };
+  }
+  return null;
 }
 
 let selected: ItemRef | null = null;
@@ -519,7 +551,8 @@ fileInputEl.addEventListener("change", () => {
         return;
       }
       pushUndo();
-      data = parsed;
+      // 旧形式(centerBoxフィールドが無い)JSONの救済のため、必ず正規化してから使う
+      data = normalizeBoardData(parsed);
       selected = null;
       markDirty();
       refreshPropertyPanel();
@@ -540,6 +573,19 @@ document.getElementById("btn-reset")!.addEventListener("click", () => {
   refreshPropertyPanel();
   clearError();
   logger.log("editor", "デフォルトの盤面データに戻しました");
+});
+
+// 「釘をすべて消す(プレーン化)」: デフォルトに戻すとは別物で、釘だけを
+// 空にする(ヘソ・電チュー・ゲート・アタッカー・一般入賞口・風車・
+// センター役物の位置はそのまま維持する)。Undo可能なので確認ダイアログは出さない。
+document.getElementById("btn-plain")!.addEventListener("click", () => {
+  pushUndo();
+  data.nails = [];
+  if (selected?.kind === "nail") selected = null;
+  markDirty();
+  refreshPropertyPanel();
+  clearError();
+  logger.log("editor", "釘をすべて削除しました(プレーン化)");
 });
 
 document.getElementById("btn-undo")!.addEventListener("click", undo);
@@ -692,12 +738,18 @@ function drawEditorOverlay(overlayCtx: CanvasRenderingContext2D, snap: PhysicsSn
   }
 
   if (selected) {
-    const p = getPos(selected);
     overlayCtx.strokeStyle = "#3ddc84";
     overlayCtx.lineWidth = 2;
-    overlayCtx.beginPath();
-    overlayCtx.arc(p.x, p.y, hitRadiusOf(selected) + 3, 0, Math.PI * 2);
-    overlayCtx.stroke();
+    if (selected.kind === "centerBox") {
+      // センター役物は大きな矩形なので、円ではなく矩形そのものをハイライトする
+      const rect = centerBoxRectFor(data);
+      overlayCtx.strokeRect(rect.x0 - 4, rect.y0 - 4, rect.x1 - rect.x0 + 8, rect.y1 - rect.y0 + 8);
+    } else {
+      const p = getPos(selected);
+      overlayCtx.beginPath();
+      overlayCtx.arc(p.x, p.y, hitRadiusOf(selected) + 3, 0, Math.PI * 2);
+      overlayCtx.stroke();
+    }
   }
 
   overlayCtx.restore();

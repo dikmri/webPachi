@@ -34,9 +34,9 @@ export function drawBoard(ctx: CanvasRenderingContext2D, s: RenderState): void {
   drawBackground(ctx, s.timeMs);
   drawSand(ctx);
   drawFieldBoundary(ctx);
-  drawCenterBox(ctx, s.timeMs);
-  drawStage(ctx);
-  drawWarpEntrance(ctx);
+  drawCenterBox(ctx, s.timeMs, s.board);
+  drawStage(ctx, s.board);
+  drawWarpEntrance(ctx, s.board);
   drawRoadNailHint(ctx);
   drawSensors(ctx, s);
   drawNails(ctx, s.board);
@@ -171,8 +171,8 @@ function drawFieldBoundary(ctx: CanvasRenderingContext2D): void {
 
 // ---------------- センター役物・ステージ・ワープ ----------------
 
-function drawCenterBox(ctx: CanvasRenderingContext2D, timeMs: number): void {
-  const { x0, y0, x1, y1 } = L.CENTER_BOX;
+function drawCenterBox(ctx: CanvasRenderingContext2D, timeMs: number, board: BoardData): void {
+  const { x0, y0, x1, y1 } = L.centerBoxRectFor(board);
   const w = x1 - x0;
   const h = y1 - y0;
 
@@ -233,12 +233,13 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-function drawStage(ctx: CanvasRenderingContext2D): void {
+function drawStage(ctx: CanvasRenderingContext2D, board: BoardData): void {
   ctx.save();
+  const segs = [L.stageLeftFor(board), L.stageRightFor(board)];
   ctx.strokeStyle = "#8fd8e0";
   ctx.lineWidth = 5;
   ctx.lineCap = "round";
-  for (const seg of [L.STAGE_LEFT, L.STAGE_RIGHT]) {
+  for (const seg of segs) {
     ctx.beginPath();
     ctx.moveTo(seg[0].x, seg[0].y);
     ctx.lineTo(seg[1].x, seg[1].y);
@@ -246,7 +247,7 @@ function drawStage(ctx: CanvasRenderingContext2D): void {
   }
   ctx.strokeStyle = "rgba(255,255,255,0.5)";
   ctx.lineWidth = 1.4;
-  for (const seg of [L.STAGE_LEFT, L.STAGE_RIGHT]) {
+  for (const seg of segs) {
     ctx.beginPath();
     ctx.moveTo(seg[0].x, seg[0].y - 1.5);
     ctx.lineTo(seg[1].x, seg[1].y - 1.5);
@@ -255,8 +256,8 @@ function drawStage(ctx: CanvasRenderingContext2D): void {
   ctx.restore();
 }
 
-function drawWarpEntrance(ctx: CanvasRenderingContext2D): void {
-  const w = L.WARP_ENTRANCE;
+function drawWarpEntrance(ctx: CanvasRenderingContext2D, board: BoardData): void {
+  const w = L.warpEntranceFor(board);
   ctx.save();
   const grad = ctx.createRadialGradient(w.x, w.y, 1, w.x, w.y, w.h / 2);
   grad.addColorStop(0, "rgba(120,230,255,0.85)");

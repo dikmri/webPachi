@@ -8,7 +8,13 @@
 import { SPEC, type BoardEvent, type PlayerState, type Stats } from "./types";
 import { logger } from "./logger";
 import { Board } from "./board/board";
-import { BOARD_DATA_STORAGE_KEY, DEFAULT_BOARD_DATA, isValidBoardData, type BoardData } from "./board/boardData";
+import {
+  BOARD_DATA_STORAGE_KEY,
+  DEFAULT_BOARD_DATA,
+  isValidBoardData,
+  normalizeBoardData,
+  type BoardData,
+} from "./board/boardData";
 import { PachinkoGame } from "./game/stateMachine";
 import { Reels } from "./game/reels";
 import { DataCounterUI } from "./ui/dataCounter";
@@ -25,8 +31,10 @@ function loadBoardData(): BoardData {
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (isValidBoardData(parsed)) {
-        logger.log("main", `盤面エディタの保存データを読み込みました(釘${parsed.nails.length}本)`);
-        return parsed;
+        // 旧形式(centerBoxフィールドが無い)データの救済のため必ず正規化する
+        const normalized = normalizeBoardData(parsed);
+        logger.log("main", `盤面エディタの保存データを読み込みました(釘${normalized.nails.length}本)`);
+        return normalized;
       }
       logger.log("main", "保存された盤面データが不正な形式のため、デフォルト盤面を使用します");
     }
