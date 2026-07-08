@@ -223,6 +223,73 @@ function snap(v: number): number {
   return snapEnabled ? Math.round(v / SNAP_SIZE) * SNAP_SIZE : v;
 }
 
+// ---------------- 新規釘の半径・直線配置ツール ----------------
+// 「新規釘の半径」はあくまで次に置く釘に適用される設定であり、既に置かれた
+// 釘の半径を変えるものではない(既存釘の半径変更は引き続きプロパティパネルの
+// 「半径」欄で行う)。
+
+/** 次に配置する釘の半径。ツールバーの数値入力と連動する */
+let newNailRadius = NAIL_RADIUS;
+
+/** 新規釘の r フィールド値を返す。既定半径(NAIL_RADIUS)と同じ場合は
+ * 「既定を使う」という意味で undefined にする(プロパティパネルの
+ * 「半径欄が空欄=既定」という既存の慣習に合わせる)。 */
+function newNailR(): number | undefined {
+  return newNailRadius === NAIL_RADIUS ? undefined : newNailRadius;
+}
+
+/** 新規釘の半径設定を反映した NailDef を1つ作る(通常クリック・直線配置共通) */
+function makeNail(x: number, y: number): NailDef {
+  const r = newNailR();
+  return r !== undefined ? { x, y, r } : { x, y };
+}
+
+/** 直線配置モードが有効かどうか(ONの間は通常クリック=釘追加が直線配置操作に切り替わる) */
+let lineToolActive = false;
+/** 直線配置の配置間隔(px)。ツールバーの数値入力と連動する */
+let lineSpacing = 20;
+/** 直線配置の確定済み始点(null=まだ始点待ち、Escでキャンセル可能) */
+let lineStart: { x: number; y: number } | null = null;
+/** 直線配置プレビュー用の現在カーソル座標(始点確定後のみ使う) */
+let linePreviewPos: { x: number; y: number } | null = null;
+
+/**
+ * 始点〜終点の間に等間隔で釘を並べて配置する。
+ * 本数は Math.max(2, Math.round(距離/lineSpacing)+1) とし、始点・終点に
+ * ちょうど乗るよう均等配分する(結果的な実際の間隔は指定値に近い値になる)。
+ * この操作全体で Undo は1回分にまとめる(釘を1本ずつUndoに積まない)。
+ */
+function placeNailLine(start: { x: number; y: number }, end: { x: number; y: number }): void {
+  const dist = Math.hypot(end.x - start.x, end.y - start.y);
+  const count = Math.max(2, Math.round(dist / lineSpacing) + 1);
+  pushUndo();
+  for (let i = 0; i < count; i++) {
+    const t = count > 1 ? i / (count - 1) : 0;
+    const nx = start.x + (end.x - start.x) * t;
+    const ny = start.y + (end.y - start.y) * t;
+    data.nails.push(makeNail(nx, ny));
+  }
+  selected = { kind: "nail", index: data.nails.length - 1 };
+  markDirty();
+  refreshPropertyPanel();
+  logger.log(
+    "editor",
+    `直線配置: (${start.x.toFixed(1)}, ${start.y.toFixed(1)}) → (${end.x.toFixed(1)}, ${end.y.toFixed(1)}) に釘${count}本を配置(合計${data.nails.length}本)`,
+  );
+}
+
+/** 直線配置モードのON/OFFを切り替える(OFFにする際は確定前の始点も破棄する) */
+function setLineToolActive(active: boolean): void {
+  lineToolActive = active;
+  lineStart = null;
+  linePreviewPos = null;
+  dragging = null;
+  pointerDownPos = null;
+  lineToolBtn.classList.toggle("active", active);
+  lineToolHintEl.style.display = active ? "block" : "none";
+  logger.log("editor", `直線配置モード: ${active ? "ON" : "OFF"}`);
+}
+
 // ---------------- Undo(直前の編集に戻る) ----------------
 
 const undoStack: BoardData[] = [];
@@ -307,6 +374,14 @@ canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
   const p = toCanvasXY(e);
   pointerDownPos = p;
+
+  // 直線配置モード中は通常のクリック=釘追加/ドラッグ=役物移動を無効化し、
+  // すべてのクリックを直線配置の始点/終点確定に使う。
+  if (lineToolActive) {
+    dragging = null;
+    return;
+  }
+
   const hit = hitTest(p.x, p.y);
   if (hit) {
     selected = hit;
@@ -319,8 +394,15 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 
 canvas.addEventListener("pointermove", (e) => {
-  if (!dragging) return;
   const p = toCanvasXY(e);
+
+  // 直線配置モードで始点確定済みなら、プレビュー線用に現在位置を更新するだけ
+  if (lineToolActive) {
+    if (lineStart) linePreviewPos = { x: snap(p.x), y: snap(p.y) };
+    return;
+  }
+
+  if (!dragging) return;
   dragging.movedEnough = true;
   setItemXY(dragging.item, snap(p.x), snap(p.y));
   refreshPropertyPanel();
@@ -328,6 +410,31 @@ canvas.addEventListener("pointermove", (e) => {
 
 canvas.addEventListener("pointerup", (e) => {
   const p = toCanvasXY(e);
+
+  if (lineToolActive) {
+    // ドラッグなし(pointerdown→pointerupの移動距離が小さい)場合のみ
+    // 「1回のクリック」として始点確定/終点確定に使う。
+    if (pointerDownPos) {
+      const dist = Math.hypot(p.x - pointerDownPos.x, p.y - pointerDownPos.y);
+      if (dist < 4) {
+        const sx = snap(p.x);
+        const sy = snap(p.y);
+        if (!lineStart) {
+          lineStart = { x: sx, y: sy };
+          linePreviewPos = { x: sx, y: sy };
+          logger.log("editor", `直線配置: 始点を (${sx.toFixed(1)}, ${sy.toFixed(1)}) に確定しました`);
+        } else {
+          const start = lineStart;
+          placeNailLine(start, { x: sx, y: sy });
+          lineStart = null;
+          linePreviewPos = null;
+        }
+      }
+    }
+    pointerDownPos = null;
+    return;
+  }
+
   if (dragging) {
     if (dragging.movedEnough) {
       const pos = getPos(dragging.item);
@@ -341,11 +448,11 @@ canvas.addEventListener("pointerup", (e) => {
   } else if (pointerDownPos) {
     const dist = Math.hypot(p.x - pointerDownPos.x, p.y - pointerDownPos.y);
     if (dist < 4) {
-      // 空いている場所をクリック → 新しい釘を追加
+      // 空いている場所をクリック → 新しい釘を追加(半径は「新規釘の半径」設定に従う)
       pushUndo();
       const nx = snap(p.x);
       const ny = snap(p.y);
-      data.nails.push({ x: nx, y: ny });
+      data.nails.push(makeNail(nx, ny));
       selected = { kind: "nail", index: data.nails.length - 1 };
       markDirty();
       refreshPropertyPanel();
@@ -361,6 +468,13 @@ window.addEventListener("keydown", (e) => {
   const target = e.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
 
+  if (e.key === "Escape" && lineToolActive && lineStart) {
+    e.preventDefault();
+    lineStart = null;
+    linePreviewPos = null;
+    logger.log("editor", "直線配置: 確定前の始点をキャンセルしました");
+    return;
+  }
   if ((e.key === "Delete" || e.key === "Backspace") && selected && isDeletable(selected)) {
     e.preventDefault();
     deleteSelected();
@@ -503,6 +617,26 @@ document.getElementById("chk-snap")!.addEventListener("change", (e) => {
   snapEnabled = (e.target as HTMLInputElement).checked;
   logger.log("editor", `グリッドスナップ: ${snapEnabled ? "ON" : "OFF"}`);
 });
+
+// ---------------- 新規釘の半径・直線配置ツールのDOM連携 ----------------
+
+const newNailRadiusEl = document.getElementById("new-nail-radius") as HTMLInputElement;
+newNailRadiusEl.value = String(NAIL_RADIUS);
+newNailRadiusEl.addEventListener("input", () => {
+  const v = Number(newNailRadiusEl.value);
+  if (Number.isFinite(v) && v > 0) newNailRadius = v;
+});
+
+const lineSpacingEl = document.getElementById("line-spacing") as HTMLInputElement;
+lineSpacingEl.value = String(lineSpacing);
+lineSpacingEl.addEventListener("input", () => {
+  const v = Number(lineSpacingEl.value);
+  if (Number.isFinite(v) && v > 0) lineSpacing = v;
+});
+
+const lineToolBtn = document.getElementById("btn-line-tool") as HTMLButtonElement;
+const lineToolHintEl = document.getElementById("line-tool-hint")!;
+lineToolBtn.addEventListener("click", () => setLineToolActive(!lineToolActive));
 
 // ---------------- ファイル操作(エクスポート・読み込み・リセット) ----------------
 
@@ -735,6 +869,32 @@ function drawEditorOverlay(overlayCtx: CanvasRenderingContext2D, snap: PhysicsSn
       overlayCtx.stroke();
     }
     overlayCtx.setLineDash([]);
+  }
+
+  if (lineToolActive && lineStart) {
+    // 直線配置プレビュー: 始点〜現在のカーソル位置を結ぶ線と、確定時に
+    // 実際に配置される釘の位置(等間隔)を先読みして表示する。
+    const end = linePreviewPos ?? lineStart;
+    overlayCtx.strokeStyle = "rgba(120,220,255,0.85)";
+    overlayCtx.lineWidth = 1.5;
+    overlayCtx.setLineDash([5, 4]);
+    overlayCtx.beginPath();
+    overlayCtx.moveTo(lineStart.x, lineStart.y);
+    overlayCtx.lineTo(end.x, end.y);
+    overlayCtx.stroke();
+    overlayCtx.setLineDash([]);
+
+    const dist = Math.hypot(end.x - lineStart.x, end.y - lineStart.y);
+    const count = Math.max(2, Math.round(dist / lineSpacing) + 1);
+    overlayCtx.fillStyle = "rgba(120,220,255,0.9)";
+    for (let i = 0; i < count; i++) {
+      const t = count > 1 ? i / (count - 1) : 0;
+      const nx = lineStart.x + (end.x - lineStart.x) * t;
+      const ny = lineStart.y + (end.y - lineStart.y) * t;
+      overlayCtx.beginPath();
+      overlayCtx.arc(nx, ny, 3, 0, Math.PI * 2);
+      overlayCtx.fill();
+    }
   }
 
   if (selected) {

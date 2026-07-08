@@ -436,13 +436,30 @@ export function createWorld(data: BoardData): {
   const bodies: Matter.Body[] = [];
 
   // ---- 外枠(発射レール外壁を兼ねる)・右側の続き ----
-  // 注意: レール内壁(RAIL_INNER_WALL)は物理ボディを作らない。
-  // レール昇降は PhysicsCore.launch()/tickRailBalls() でスクリプト的に
-  // (matter-js の衝突ではなく直接座標補間で)動かすため、内壁は
-  // renderer.ts の描画専用データとして扱う。理由は tickRailBalls の
-  // コメントを参照(細い二重壁での衝突がシビアすぎて安定しなかったため)。
   bodies.push(...buildWallChain(RAIL_OUTER_WALL, 4, 0.25));
   bodies.push(...buildWallChain(FIELD_RIGHT_WALL, 6, 0.25));
+
+  // ---- レール内壁の「戻り防止片」(直線区間のみ物理ボディ化) ----
+  // レール「昇降中」の玉自体は tickRailBalls() でスクリプト的に座標補間する
+  // だけで matter-js の衝突を一切使わない(isSensor: true にしているため、
+  // この壁を含めどの物体とも衝突判定は発生しない。理由は tickRailBalls の
+  // コメント参照: 細い二重壁での衝突がシビアすぎて安定しなかったため)。
+  //
+  // 一方、レールを登り切って盤面に放出された「通常の玉」(isSensor: false)
+  // が盤面左下をバウンドして再びレール通り道(発射口付近)へ入り込んで
+  // しまうバグがあった(内壁の物理ボディが存在しなかったため)。
+  //
+  // 修正: RAIL_INNER_WALL の「直線区間だけ」(RAIL_CENTERLINE[0..12] = 発射口
+  // 付近から円弧が始まる直前まで、おおよそ y:106〜668 の範囲)を物理ボディ化する。
+  // 円弧区間(RAIL_CENTERLINE[13..]、玉の解放点を含む上部の弧)まで含めて
+  // 全区間を物理化すると、解放直後の玉がこの壁のすぐそば(解放点=弧の終端が
+  // この壁の一部でもある)を接線方向にかすめるように移動するため、放出直後に
+  // 自分自身が今来た壁に接触・干渉してしまい、全power帯でヘソ入賞が0発になる
+  // 深刻な回転率崩壊を引き起こすことを実測で確認した。ユーザーが報告した
+  // 「発射口に戻る」問題は盤面下部(直線区間)の話なので、円弧区間には
+  // 手を入れず直線区間だけを塞ぐことで、安全に戻り防止の役割を果たす。
+  const RAIL_INNER_STRAIGHT_POINTS = 13; // RAIL_CENTERLINEの直線区間の点数(sampleLineのcount=12 → 13点)
+  bodies.push(...buildWallChain(RAIL_INNER_WALL.slice(0, RAIL_INNER_STRAIGHT_POINTS), 4, 0.25));
 
   // ---- センター役物(液晶枠)。中は完全に塞ぎ、玉は入れない(位置はdata.centerBox由来) ----
   const cb = centerBoxRectFor(data);

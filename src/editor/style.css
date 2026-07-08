@@ -107,6 +107,14 @@ button:hover:not(:disabled) { background: #384259; }
 button:disabled { opacity: 0.4; cursor: default; }
 button.danger { border-color: #6b3040; color: #ffb4c0; }
 button.danger:hover:not(:disabled) { background: #4a2430; }
+/* 直線配置ツールなどのトグルボタンがON状態であることを示すスタイル */
+button.active {
+  background: #3ddc84;
+  color: #0b0d13;
+  border-color: #3ddc84;
+  font-weight: 700;
+}
+button.active:hover:not(:disabled) { background: #34c674; }
 
 .chk-row {
   display: flex;
