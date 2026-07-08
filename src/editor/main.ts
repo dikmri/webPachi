@@ -1395,133 +1395,136 @@ const YEN1000_SIM_MAX_SHOTS = 20000;
 /** 安全装置: 実時間換算30分に相当するシミュレーション内時間(ms)の上限 */
 const YEN1000_SIM_MAX_TIME_MS = 1_800_000;
 
-function runYen1000Simulation(power: number): void {
+interface Yen1000Trial {
+  spins: number;
+  shots: number;
+  hitJackpot: boolean;
+}
+
+/**
+ * 1000円(持ち玉250発)を1試行分シミュレーションする。
+ *
+ * **重要**: 大当たり(jackpot-start)が発生した時点でその試行は即座に打ち切る。
+ * 大当たり後の出玉(アタッカー賞球13玉×最大9カウント×最大16R≒最大1872玉、確変中の
+ * 電チュー連続入賞等)まで撃ち込み続けると、「その1000円セッションでたまたま大当たりを
+ * 引けたかどうか」という運の要素が回転数に混ざってしまい、実機でよく言われる
+ * 「1000円で15〜20回転」という通常時の回転効率(釘の物理的な性能)の指標とは
+ * 全く別のものになってしまう(この機種の確率1/99.9では、賞球を撃ち込み続けた場合
+ * 1000円分のセッション中に大当たりを引く確率は約98%にも達し、ほぼ毎回このバイアスが
+ * かかってしまうことを実測で確認した)。
+ *
+ * そのため「通常入賞(ヘソ・一般入賞)による玉の再投入は含めるが、大当たり由来の
+ * 出玉は含めない」形にすることで、要望どおり「他入賞で増えた球数も含めて」
+ * かつ実機の指標と比較可能な回転数を1試行ぶん計測する。
+ */
+function simulateYen1000Trial(power: number): Yen1000Trial {
+  const sim = new PhysicsCore(data);
+  const simGame = new PachinkoGame();
+
+  // 1000円分の持ち玉から開始する(500円=125玉なので1000円=250発)
+  let balls = (1000 / SPEC.lendYen) * SPEC.lendBalls;
+  let shots = 0;
+  let spins = 0;
+  let simTimeMs = 0;
+  let launchTimer = 0;
+  let hitJackpot = false;
+
+  for (;;) {
+    if (hitJackpot) break; // 大当たりが始まった時点でこの試行は終了(出玉分は撃ち込まない)
+
+    // 終了判定: 持ち玉が尽き、盤面上の玉もなく、変動・保留も残っていなければ収束完了
+    const stillPlaying = balls > 0 || sim.ballsInPlay() > 0 || simGame.phase !== "idle" || simGame.holdCount > 0;
+    if (!stillPlaying) break;
+
+    if (shots >= YEN1000_SIM_MAX_SHOTS || simTimeMs >= YEN1000_SIM_MAX_TIME_MS) {
+      logger.error(
+        `1000円回転数シミュレーション: 安全装置により1試行を強制終了しました` +
+          `(発射数=${shots}, 経過シミュレーション時間=${simTimeMs}ms)。`,
+      );
+      break;
+    }
+
+    // 発射(持ち玉が残っている間だけ、発射間隔ごとに1発。src/main.tsのtickLaunchと同じパターン)
+    if (balls > 0) {
+      launchTimer += YEN1000_SIM_STEP_MS;
+      while (launchTimer >= SPEC.launchIntervalMs && balls > 0) {
+        launchTimer -= SPEC.launchIntervalMs;
+        sim.launch(power);
+        balls--;
+        shots++;
+      }
+    } else {
+      launchTimer = 0;
+    }
+
+    // 物理を進め、発生したBoardEventをゲームロジックへ転送しつつ、通常入賞の賞球で
+    // 持ち玉を増やす(src/main.tsのhandleBoardEventと同じ賞球テーブル=SPEC.payoutを使う。
+    // ただしアタッカー賞球は「大当たり由来の出玉」なので、ここでは持ち玉に加算しない=
+    // 大当たり中の追加発射が発生しないようにする)。
+    const events = sim.update(YEN1000_SIM_STEP_MS);
+    for (const ev of events) {
+      simGame.onBoardEvent(ev);
+      if (ev.type === "heso") balls += SPEC.payout.heso;
+      else if (ev.type === "pocket") balls += SPEC.payout.pocket;
+      // denchu/attackerは電サポ・大当たり中にのみ発生し得るため、通常時の回転効率には含めない。
+    }
+
+    // ゲームロジックの時間を進める。jackpot-startが来たら即座に打ち切りフラグを立てる
+    // (アタッカー開閉やラウンド進行はもう追わない。回転数はこの時点までの値を採用する)。
+    const gameEvents = simGame.update(YEN1000_SIM_STEP_MS);
+    for (const ev of gameEvents) {
+      if (ev.type === "spin-start") spins++;
+      else if (ev.type === "jackpot-start") hitJackpot = true;
+    }
+
+    simTimeMs += YEN1000_SIM_STEP_MS;
+  }
+
+  return { spins, shots, hitJackpot };
+}
+
+/** 1000円回転数シミュレーションの試行回数(大当たり有無による1試行ごとの大きなブレを平均化するため) */
+function runYen1000Simulation(power: number, trials: number): void {
   const statusEl = document.getElementById("yen1000sim-status")!;
   statusEl.textContent = "実行中…";
-  logger.log("editor", `1000円回転数シミュレーション開始: power=${power}`);
+  logger.log("editor", `1000円回転数シミュレーション開始: power=${power} 試行回数=${trials}`);
 
   // ブラウザに「実行中…」を描画させてから重い同期ループへ入る(簡易シミュレーションと同じ手法)
   window.setTimeout(() => {
-    const sim = new PhysicsCore(data);
-    const simGame = new PachinkoGame();
+    let sumSpins = 0;
+    let sumShots = 0;
+    let jackpotHits = 0;
 
-    // 1000円分の持ち玉から開始する(500円=125玉なので1000円=250発)
-    let balls = (1000 / SPEC.lendYen) * SPEC.lendBalls;
-    let totalShots = 0;
-    let totalSpins = 0;
-    let totalJackpots = 0;
-    let simTimeMs = 0;
-    let launchTimer = 0;
-    let aborted = false;
-
-    // 電チュー開放タイマー(src/main.tsのDENCHU_OPEN_MS/openDenchuIfSupported/tickDenchuと同じロジック)
-    const DENCHU_OPEN_MS = 1500;
-    let denchuOpenRemaining = 0;
-    const openDenchuIfSupported = (): void => {
-      if (!simGame.denSupport) return;
-      denchuOpenRemaining = DENCHU_OPEN_MS;
-      sim.setDenchuOpen(true);
-    };
-    const tickDenchu = (dtMs: number): void => {
-      if (denchuOpenRemaining <= 0) return;
-      denchuOpenRemaining -= dtMs;
-      if (denchuOpenRemaining <= 0) {
-        denchuOpenRemaining = 0;
-        sim.setDenchuOpen(false);
-      }
-    };
-
-    for (;;) {
-      // 終了判定: 持ち玉が尽き、盤面上の玉もなく、変動・大当たり・保留も残っていなければ収束完了
-      const stillPlaying = balls > 0 || sim.ballsInPlay() > 0 || simGame.phase !== "idle" || simGame.holdCount > 0;
-      if (!stillPlaying) break;
-
-      if (totalShots >= YEN1000_SIM_MAX_SHOTS || simTimeMs >= YEN1000_SIM_MAX_TIME_MS) {
-        aborted = true;
-        logger.error(
-          `1000円回転数シミュレーション: 安全装置により強制終了しました` +
-            `(総発射数=${totalShots}, 経過シミュレーション時間=${simTimeMs}ms)。` +
-            `確率設定や大当たり終了条件に異常がある可能性があります。`,
-        );
-        break;
-      }
-
-      // 発射(持ち玉が残っている間だけ、発射間隔ごとに1発。src/main.tsのtickLaunchと同じパターン)
-      if (balls > 0) {
-        launchTimer += YEN1000_SIM_STEP_MS;
-        while (launchTimer >= SPEC.launchIntervalMs && balls > 0) {
-          launchTimer -= SPEC.launchIntervalMs;
-          sim.launch(power);
-          balls--;
-          totalShots++;
-        }
-      } else {
-        launchTimer = 0;
-      }
-
-      tickDenchu(YEN1000_SIM_STEP_MS);
-
-      // 物理を進め、発生したBoardEventをゲームロジックへ転送しつつ、賞球で持ち玉を増やす
-      // (src/main.tsのhandleBoardEventと同じ賞球テーブル=SPEC.payoutを使う)。
-      const events = sim.update(YEN1000_SIM_STEP_MS);
-      for (const ev of events) {
-        simGame.onBoardEvent(ev);
-        switch (ev.type) {
-          case "heso":
-            balls += SPEC.payout.heso;
-            break;
-          case "denchu":
-            balls += SPEC.payout.denchu;
-            break;
-          case "pocket":
-            balls += SPEC.payout.pocket;
-            break;
-          case "attacker":
-            balls += SPEC.payout.attacker;
-            break;
-          case "gate":
-            openDenchuIfSupported();
-            break;
-          default:
-            break;
-        }
-      }
-
-      // ゲームロジックの時間を進め、アタッカー開閉・回転数/大当たり回数カウンタを更新する
-      // (src/main.tsのhandleGameEventのround-start/round-end/jackpot-endと同じパターン)。
-      const gameEvents = simGame.update(YEN1000_SIM_STEP_MS);
-      for (const ev of gameEvents) {
-        if (ev.type === "round-start") {
-          sim.setAttackerOpen(true);
-        } else if (ev.type === "round-end" || ev.type === "jackpot-end") {
-          sim.setAttackerOpen(false);
-        } else if (ev.type === "spin-start") {
-          totalSpins++;
-        } else if (ev.type === "jackpot-start") {
-          totalJackpots++;
-        }
-      }
-      sim.setAttackerOpen(simGame.attackerShouldOpen);
-
-      simTimeMs += YEN1000_SIM_STEP_MS;
+    for (let i = 0; i < trials; i++) {
+      const result = simulateYen1000Trial(power);
+      sumSpins += result.spins;
+      sumShots += result.shots;
+      if (result.hitJackpot) jackpotHits++;
     }
 
-    document.getElementById("yen1000sim-spins")!.textContent = String(totalSpins);
-    document.getElementById("yen1000sim-shots")!.textContent = String(totalShots);
-    document.getElementById("yen1000sim-jackpots")!.textContent = String(totalJackpots);
+    const avgSpins = sumSpins / trials;
+    const avgShots = sumShots / trials;
+    const jackpotRate = (jackpotHits / trials) * 100;
+
+    document.getElementById("yen1000sim-spins")!.textContent = avgSpins.toFixed(1);
+    document.getElementById("yen1000sim-shots")!.textContent = avgShots.toFixed(1);
+    document.getElementById("yen1000sim-jackpots")!.textContent =
+      `${jackpotHits}/${trials}試行 (${jackpotRate.toFixed(1)}%)`;
     (document.getElementById("yen1000sim-result") as HTMLElement).style.display = "block";
 
-    statusEl.textContent = aborted ? "完了(安全装置により強制終了しました。ログを確認してください)" : "完了";
+    statusEl.textContent = "完了";
     logger.log(
       "editor",
-      `1000円回転数シミュレーション完了: 総回転数=${totalSpins}回転 総発射数=${totalShots} 大当たり=${totalJackpots}回`,
+      `1000円回転数シミュレーション完了: 平均回転数=${avgSpins.toFixed(1)}回転 ` +
+        `平均発射数=${avgShots.toFixed(1)} 大当たり率=${jackpotHits}/${trials}(${jackpotRate.toFixed(1)}%)`,
     );
   }, 10);
 }
 
 document.getElementById("btn-yen1000sim")!.addEventListener("click", () => {
   const power = Number((document.getElementById("sim-power") as HTMLInputElement).value) || 0.6;
-  runYen1000Simulation(power);
+  const trials = Math.max(1, Math.round(Number((document.getElementById("yen1000sim-trials") as HTMLInputElement).value) || 60));
+  runYen1000Simulation(power, trials);
 });
 
 // ---------------- 描画ループ(盤面 + エディタ用オーバーレイ) ----------------
